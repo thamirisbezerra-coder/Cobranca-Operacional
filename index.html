@@ -1,0 +1,840 @@
+import React, { useState, useMemo, useRef, useEffect } from 'react';
+import { 
+  LayoutDashboard, Link2, Building2, UploadCloud, Search, Bell, 
+  CheckCircle2, AlertCircle, Filter, Menu, X, Zap, ArrowRight, 
+  SearchCode, TableProperties, ArrowUpDown, Download, FileUp, 
+  Loader2, ExternalLink, Clock, FileText, FileBadge2, FileImage, 
+  Trash2, Eye, Camera, Send, Mail, UserCircle2, Pencil
+} from 'lucide-react';
+import { 
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, 
+  ResponsiveContainer, PieChart, Pie, Cell 
+} from 'recharts';
+
+const cleanCnpj = (cnpj) => String(cnpj || '').replace(/\D/g, '');
+const formatCnpj = (cnpj) => cleanCnpj(cnpj).replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/, "$1.$2.$3/$4-$5");
+const formatCurrency = (value) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value || 0);
+
+const parseDate = (dateStr) => {
+  if (!dateStr) return new Date();
+  if (dateStr.includes('T')) return new Date(dateStr);
+  const parts = dateStr.split('/');
+  if (parts.length === 3) return new Date(parts[2], parts[1] - 1, parts[0]);
+  return new Date();
+};
+
+const calcularDiasAtraso = (dataStr) => {
+  const dataEmissao = parseDate(dataStr);
+  const hoje = new Date();
+  const diffTime = hoje.getTime() - dataEmissao.getTime();
+  return Math.max(0, Math.floor(diffTime / (1000 * 60 * 60 * 24)));
+};
+
+const mapNFs = (data) => data.map((item, index) => ({
+  id: String(item['Chave de Acesso'] || item['Número'] || `nf-${index}`) + `_idx_${index}`,
+  cnpj: String(item['CNPJ Emitente'] || ''),
+  nome: String(item['Nome PJ Emitente'] || ''),
+  data: String(item['Data Emissão'] || new Date().toLocaleDateString('pt-BR')),
+  numero: String(item['Número'] || ''),
+  valor: Number(item['Valor Total da Nota']) || 0,
+  status: 'pendente'
+}));
+
+const mapPedidos = (data) => data.map((item, index) => ({
+  id: String(item['Pedido'] || `ped-${index}`) + `_idx_${index}`,
+  numeroPedido: String(item['Pedido'] || 'Sem Nº'),
+  cnpj: String(item['Fornecedor Nº CNPJ'] || ''),
+  fornecedor: String(item['Fornecedor Razão Social'] || ''),
+  centroCusto: String(item['Centro de Custo de Alocação'] || 'Setor Não Identificado'),
+  valor: Number(item['Valor Total do Item']) || 0,
+  criador: String(item['Usuário de Criação'] || ''),
+  descricao: String(item['Descrição do Item'] || 'Sem descrição detalhada'),
+  quantidade: String(item['Quantidade do item'] || '1')
+}));
+
+export default function App() {
+  const [activeTab, setActiveTab] = useState('setores');
+  const [nfs, setNfs] = useState([]);
+  const [pedidos, setPedidos] = useState([]);
+  const [vinculos, setVinculos] = useState([]);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  
+  // Estados de Configuração e Modais
+  const [filtroSetor, setFiltroSetor] = useState('Todos');
+  const [emailsSetores, setEmailsSetores] = useState({});
+  const [nfSelecionada, setNfSelecionada] = useState(null);
+  const [anexosNf, setAnexosNf] = useState({}); // Arquivo da NF em si (PDF)
+  
+  // Modos de Edição Manual (Lápis)
+  const [setoresManuais, setSetoresManuais] = useState({});
+  const [isEditingNfInfo, setIsEditingNfInfo] = useState(false);
+  const [editSetor, setEditSetor] = useState('');
+  const [searchPedidoStr, setSearchPedidoStr] = useState('');
+
+  // Fluxo Fiscal Obrigatório (Check do Lançamento)
+  const [dadosFiscais, setDadosFiscais] = useState({}); // { nfId: { nome, fileUrl, fileName, data } }
+  const [modalFiscalOpen, setModalFiscalOpen] = useState(null); // nfId
+  const [formFiscalNome, setFormFiscalNome] = useState('');
+  const [formFiscalFile, setFormFiscalFile] = useState(null);
+
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    const fetchPlanilha = async () => {
+      try {
+        const urlAPI = 'https://script.google.com/macros/s/AKfycbzWeQGD7diqtSDSqfPyQ0tJbAJD7zVRWn4N81rMCQWQqghOc1iLDG8cdJYsfp5qmbie/exec';
+        const response = await fetch(urlAPI);
+        if (!response.ok) throw new Error("Erro na API.");
+        const data = await response.json();
+        
+        if (data.nfs) setNfs(mapNFs(data.nfs));
+        if (data.pedidos) setPedidos(mapPedidos(data.pedidos));
+      } catch (err) {
+        setError("Não foi possível conectar com a planilha. O link de edição direta está no menu à esquerda para conferir a estrutura.");
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchPlanilha();
+  }, []);
+
+  // Aqui geramos a lista inteligente: Notas Fiscais buscando o contexto do seu Pedido!
+  const nfsMapeadas = useMemo(() => {
+    return nfs.map(nf => {
+      const vinculo = vinculos.find(v => v.nfId === nf.id);
+      let pedidoRelacionado = null;
+      
+      if (vinculo) {
+        pedidoRelacionado = pedidos.find(p => p.id === vinculo.pedidoId);
+      } else {
+        // Tenta cruzar automaticamente pelo CNPJ
+        const possiveis = pedidos.filter(p => cleanCnpj(p.cnpj) === cleanCnpj(nf.cnpj));
+        if (possiveis.length === 1) { 
+          pedidoRelacionado = possiveis[0]; 
+        } else if (possiveis.length > 1) {
+          // Se tiver vários pedidos do mesmo fornecedor, pega o primeiro por padrão para inferir o setor (aproximação)
+          pedidoRelacionado = possiveis[0];
+        }
+      }
+      
+      let centroCusto = 'Setor Indefinido (Sem Pedido)';
+      if (setoresManuais[nf.id]) {
+        centroCusto = setoresManuais[nf.id]; // Sobreposição manual do Setor
+      } else if (pedidoRelacionado) {
+        centroCusto = pedidoRelacionado.centroCusto; // Herda do pedido
+      }
+      
+      return {
+        ...nf,
+        pedido: pedidoRelacionado,
+        centroCusto,
+        diasAtraso: calcularDiasAtraso(nf.data)
+      };
+    });
+  }, [nfs, pedidos, vinculos, setoresManuais]);
+
+  const setores = useMemo(() => {
+    return Array.from(new Set(nfsMapeadas.map(n => n.centroCusto))).sort();
+  }, [nfsMapeadas]);
+
+  const setoresDisponiveis = useMemo(() => {
+    return Array.from(new Set(pedidos.map(p => p.centroCusto))).filter(Boolean).sort();
+  }, [pedidos]);
+
+  const handleAbrirDetalhes = (nf) => {
+    setNfSelecionada(nf);
+    setIsEditingNfInfo(false);
+    setEditSetor(setoresManuais[nf.id] || '');
+    setSearchPedidoStr('');
+  };
+
+  const kpis = useMemo(() => {
+    const notasParaConciliar = nfsMapeadas.filter(n => !n.pedido).length;
+    const pendentesFiscal = nfsMapeadas.filter(n => n.pedido && !dadosFiscais[n.id]);
+    const concluidas = nfsMapeadas.filter(n => dadosFiscais[n.id]);
+    
+    return {
+      notasParaConciliar,
+      pendentesFiscal: pendentesFiscal.length,
+      valorPendenteFiscal: pendentesFiscal.reduce((acc, curr) => acc + curr.valor, 0),
+      totalConcluidas: concluidas.length,
+      valorConcluido: concluidas.reduce((acc, curr) => acc + curr.valor, 0),
+      progresso: nfsMapeadas.length > 0 ? Math.round((concluidas.length / nfsMapeadas.length) * 100) : 0
+    };
+  }, [nfsMapeadas, dadosFiscais]);
+
+  const topSetoresPendentes = useMemo(() => {
+    const agrupamento = {};
+    nfsMapeadas.forEach(nf => {
+      // É considerado atraso se a NF ainda não tem o Lançamento Fiscal comprovado
+      if (!dadosFiscais[nf.id]) {
+        const setor = nf.centroCusto;
+        if (!agrupamento[setor]) agrupamento[setor] = { qtde: 0, valor: 0 };
+        agrupamento[setor].qtde += 1;
+        agrupamento[setor].valor += nf.valor;
+      }
+    });
+    return Object.entries(agrupamento)
+      .map(([nome, dados]) => ({ nome: nome.split(' - ')[1] || nome, ...dados }))
+      .sort((a, b) => b.valor - a.valor)
+      .slice(0, 4);
+  }, [nfsMapeadas, dadosFiscais]);
+
+  const handleVincularManual = (nfId, pedidoId) => {
+    setVinculos([...vinculos, { nfId, pedidoId, data: new Date().toISOString() }]);
+  };
+
+  const handleDesvincular = (nfId) => {
+    setVinculos(vinculos.filter(v => v.nfId !== nfId));
+  };
+
+  const handleUploadPDFNota = (nfId, e) => {
+    const file = e.target.files[0];
+    if (file) {
+      setAnexosNf(prev => ({
+        ...prev,
+        [nfId]: { name: file.name, size: `${(file.size/1024/1024).toFixed(2)} MB`, type: file.type, url: URL.createObjectURL(file) }
+      }));
+    }
+  };
+
+  const handleSalvarFiscal = () => {
+    if (!formFiscalNome || !formFiscalFile) return;
+    setDadosFiscais(prev => ({
+      ...prev,
+      [modalFiscalOpen]: {
+        nome: formFiscalNome,
+        fileName: formFiscalFile.name,
+        fileUrl: URL.createObjectURL(formFiscalFile),
+        data: new Date().toLocaleDateString('pt-BR')
+      }
+    }));
+    setModalFiscalOpen(null);
+  };
+
+  const renderModalLancarFiscal = () => {
+    if (!modalFiscalOpen) return null;
+    return (
+      <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[200] flex items-center justify-center p-4 animate-in fade-in">
+        <div className="bg-white rounded-3xl w-full max-w-md shadow-2xl overflow-hidden flex flex-col">
+          <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-indigo-600">
+            <h2 className="text-xl font-bold text-white flex items-center gap-2">
+              <CheckCircle2 size={24} /> Lançar para o Fiscal
+            </h2>
+            <button onClick={() => setModalFiscalOpen(null)} className="p-1.5 text-indigo-200 hover:text-white rounded-xl transition-colors">
+              <X size={20} />
+            </button>
+          </div>
+          <div className="p-6 space-y-5 bg-slate-50/50">
+            <div className="bg-amber-50 border border-amber-100 p-3 rounded-xl mb-2">
+              <p className="text-xs font-bold text-amber-800">Obrigatório: Identifique-se e anexe o print do E-mail enviado ao departamento fiscal contendo a Nota para liberar este pedido.</p>
+            </div>
+            <div>
+              <label className="block text-sm font-bold text-slate-700 mb-1.5">Sua Assinatura / Nome</label>
+              <div className="relative">
+                <UserCircle2 className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                <input 
+                  type="text" 
+                  placeholder="Ex: João Silva" 
+                  value={formFiscalNome}
+                  onChange={(e) => setFormFiscalNome(e.target.value)}
+                  className="w-full pl-10 pr-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                />
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm font-bold text-slate-700 mb-1.5">Print do E-mail (Comprovativo)</label>
+              <div className="border-2 border-dashed border-slate-300 rounded-xl p-4 bg-white hover:bg-indigo-50 hover:border-indigo-300 transition-colors cursor-pointer text-center relative">
+                <input 
+                  type="file" 
+                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                  accept="image/*,.pdf"
+                  onChange={(e) => setFormFiscalFile(e.target.files[0])}
+                />
+                <Camera size={24} className={`mx-auto mb-2 ${formFiscalFile ? 'text-indigo-600' : 'text-slate-400'}`} />
+                {formFiscalFile ? (
+                  <p className="text-sm font-bold text-indigo-600 truncate px-2">{formFiscalFile.name}</p>
+                ) : (
+                  <>
+                    <p className="text-sm font-bold text-slate-600">Clique para anexar o Print</p>
+                    <p className="text-xs text-slate-400 mt-1">Obrigatório Imagens ou PDF</p>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+          <div className="p-5 border-t border-slate-100 bg-white flex justify-end gap-3">
+            <button onClick={() => setModalFiscalOpen(null)} className="px-5 py-2.5 text-sm font-bold text-slate-500 hover:bg-slate-100 rounded-xl transition-colors">Cancelar</button>
+            <button 
+              onClick={handleSalvarFiscal}
+              disabled={!formFiscalNome || !formFiscalFile}
+              className="px-5 py-2.5 bg-indigo-600 text-white text-sm font-bold rounded-xl hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm flex items-center gap-2"
+            >
+              Confirmar Envio <Send size={16} />
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderModalDetalhesNF = () => {
+    if (!nfSelecionada) return null;
+    const anexoPDF = anexosNf[nfSelecionada.id];
+    const isVinculado = vinculos.some(v => v.nfId === nfSelecionada.id);
+    const pedContext = nfSelecionada.pedido;
+    
+    // Sugestões de vínculos manuais (caso a NF não tenha cruzado automaticamente)
+    const sugestoesExtras = pedidos.filter(p => cleanCnpj(p.cnpj) === cleanCnpj(nfSelecionada.cnpj));
+
+    return (
+      <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 animate-in fade-in duration-200">
+        <div className="bg-white rounded-3xl w-full max-w-4xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+          
+          <div className="p-6 border-b border-slate-100 flex justify-between items-start bg-slate-50">
+            <div>
+              <div className="flex items-center gap-3 mb-2">
+                <span className="text-xs font-black px-3 py-1 bg-indigo-100 text-indigo-700 rounded-lg uppercase tracking-wider">Nota Fiscal Nº {nfSelecionada.numero}</span>
+                <span className={`text-[10px] font-black px-2 py-1 rounded-lg uppercase tracking-wider flex items-center gap-1 ${nfSelecionada.diasAtraso > 15 ? 'bg-rose-100 text-rose-700' : 'bg-amber-100 text-amber-700'}`}>
+                  <Clock size={12}/> Aguardando há {nfSelecionada.diasAtraso} dias
+                </span>
+              </div>
+              <h2 className="text-2xl font-bold text-slate-800">{nfSelecionada.nome}</h2>
+              <p className="text-sm text-slate-500 font-mono mt-1">CNPJ: {formatCnpj(nfSelecionada.cnpj)}</p>
+            </div>
+            <button onClick={() => setNfSelecionada(null)} className="p-2 bg-white border border-slate-200 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors">
+              <X size={20} />
+            </button>
+          </div>
+
+          <div className="p-6 overflow-y-auto flex-1 space-y-8 bg-white">
+            {/* Secção 1: Contexto do Pedido (Se Existir) */}
+            <div>
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2 uppercase tracking-wider">
+                  <Building2 size={16} className="text-indigo-500" /> Referência no Sistema (Pedido / Setor)
+                </h3>
+                <button
+                  onClick={() => setIsEditingNfInfo(!isEditingNfInfo)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-xs font-bold transition-colors shadow-sm"
+                >
+                  <Pencil size={12} /> {isEditingNfInfo ? 'Cancelar Edição' : 'Editar Vínculo/Setor'}
+                </button>
+              </div>
+
+              {isEditingNfInfo ? (
+                <div className="bg-white border-2 border-indigo-100 rounded-2xl p-5 shadow-sm space-y-5 animate-in fade-in zoom-in-95 duration-200">
+                  {/* SETOR */}
+                  <div>
+                    <label className="text-xs font-bold text-slate-500 uppercase">1. Forçar Setor Manualmente (Sem Pedido)</label>
+                    <div className="flex flex-col md:flex-row gap-2 mt-1.5">
+                      <select
+                          value={editSetor}
+                          onChange={e => setEditSetor(e.target.value)}
+                          className="flex-1 p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:border-indigo-500 font-medium text-slate-700"
+                      >
+                          <option value="">-- Herdar Setor do Pedido Original --</option>
+                          {setoresDisponiveis.map(s => <option key={s} value={s}>{s}</option>)}
+                      </select>
+                      <button
+                          onClick={() => {
+                              setSetoresManuais(prev => {
+                                const next = { ...prev };
+                                if (editSetor) next[nfSelecionada.id] = editSetor;
+                                else delete next[nfSelecionada.id];
+                                return next;
+                              });
+                              setIsEditingNfInfo(false);
+                          }}
+                          className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2.5 rounded-xl text-xs font-bold transition-colors shadow-sm"
+                      >
+                          Gravar Setor
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* PEDIDO */}
+                  <div className="pt-5 border-t border-slate-100">
+                    <label className="text-xs font-bold text-slate-500 uppercase">2. Buscar e Vincular Pedido do Sistema</label>
+                    <div className="relative mt-1.5">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16}/>
+                        <input
+                            type="text"
+                            placeholder="Digite o Nº do Pedido ou Nome do Fornecedor..."
+                            value={searchPedidoStr}
+                            onChange={e => setSearchPedidoStr(e.target.value)}
+                            className="w-full pl-10 p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:border-indigo-500 font-medium"
+                        />
+                    </div>
+                    {searchPedidoStr.length > 1 && (
+                        <div className="mt-3 max-h-48 overflow-y-auto border border-slate-200 rounded-xl bg-white shadow-sm divide-y divide-slate-50">
+                            {pedidos.filter(p => p.numeroPedido.includes(searchPedidoStr) || p.fornecedor.toLowerCase().includes(searchPedidoStr.toLowerCase())).map(p => (
+                                <div key={p.id} className="flex justify-between items-center p-3 hover:bg-indigo-50/50 transition-colors">
+                                    <div>
+                                        <p className="text-xs font-bold text-slate-800">Ped. {p.numeroPedido}</p>
+                                        <p className="text-[10px] text-slate-500 truncate w-48">{p.fornecedor}</p>
+                                    </div>
+                                    <button
+                                        onClick={() => {
+                                            handleVincularManual(nfSelecionada.id, p.id);
+                                            setIsEditingNfInfo(false);
+                                        }}
+                                        className="bg-emerald-500 hover:bg-emerald-600 text-white text-[10px] font-bold px-3 py-1.5 rounded-lg flex items-center gap-1 transition-colors"
+                                    >
+                                        <Link2 size={12}/> Vincular
+                                    </button>
+                                </div>
+                            ))}
+                            {pedidos.filter(p => p.numeroPedido.includes(searchPedidoStr) || p.fornecedor.toLowerCase().includes(searchPedidoStr.toLowerCase())).length === 0 && (
+                               <div className="p-4 text-center text-xs text-slate-500 font-medium">Nenhum pedido encontrado.</div>
+                            )}
+                        </div>
+                    )}
+                  </div>
+                </div>
+              ) : pedContext ? (
+                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-5 shadow-sm grid grid-cols-1 md:grid-cols-4 gap-6 relative overflow-hidden">
+                  <div className="absolute top-0 left-0 w-1.5 h-full bg-indigo-500"></div>
+                  <div className="md:col-span-2">
+                    <p className="text-xs font-bold text-slate-400 uppercase mb-1.5 flex items-center gap-1.5">Descrição do Item Solicitado</p>
+                    <p className="text-sm font-bold text-slate-800 leading-relaxed">{pedContext.descricao}</p>
+                    <div className="flex items-center gap-2 mt-2">
+                      <span className="text-[10px] bg-white border border-slate-200 px-2 py-1 rounded font-bold text-slate-600">Pedido Nº {pedContext.numeroPedido}</span>
+                      <span className="text-[10px] bg-indigo-50 text-indigo-700 px-2 py-1 rounded font-bold">{pedContext.centroCusto}</span>
+                    </div>
+                  </div>
+                  <div>
+                    <p className="text-xs font-bold text-slate-400 uppercase mb-1.5 flex items-center gap-1.5">Quantidade</p>
+                    <p className="text-sm font-bold text-slate-800">{pedContext.quantidade} unidades</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-xs font-bold text-slate-400 uppercase mb-1.5 flex items-center gap-1.5 justify-end">Valor Autorizado</p>
+                    <p className="text-lg font-black text-emerald-600">{formatCurrency(pedContext.valor)}</p>
+                  </div>
+                </div>
+              ) : (
+                <div className="bg-amber-50 border border-amber-200 rounded-2xl p-5">
+                  <p className="text-sm font-bold text-amber-800 flex items-center gap-2"><AlertCircle size={16}/> Esta Nota Fiscal não encontrou o pedido de origem automaticamente.</p>
+                  
+                  {setoresManuais[nfSelecionada.id] ? (
+                     <div className="mt-3 text-xs text-indigo-700 bg-indigo-100/60 p-3 rounded-xl font-bold flex items-center gap-2">
+                        <CheckCircle2 size={16} className="text-indigo-500" />
+                        Encaminhada manualmente para cobrança no setor: {setoresManuais[nfSelecionada.id]}
+                     </div>
+                  ) : (
+                     <p className="text-xs mt-2 text-amber-700 font-medium">Use o botão <span className="font-bold">Editar Lápis</span> no topo para encaminhar manualmente para um Setor, ou para procurar e vincular a um pedido existente.</p>
+                  )}
+
+                  {sugestoesExtras.length > 0 && !setoresManuais[nfSelecionada.id] && (
+                    <div className="mt-4 space-y-2">
+                      <p className="text-xs font-bold text-slate-500 uppercase">Sugestões do mesmo CNPJ:</p>
+                      {sugestoesExtras.map(p => (
+                        <div key={p.id} className="flex justify-between items-center bg-white p-3 rounded-xl border border-amber-100 shadow-sm">
+                          <div>
+                            <span className="font-bold text-slate-800 text-sm">Pedido {p.numeroPedido}</span>
+                            <span className="text-xs text-slate-500 ml-2">{p.descricao}</span>
+                          </div>
+                          <button onClick={() => handleVincularManual(nfSelecionada.id, p.id)} className="text-xs bg-indigo-600 text-white font-bold px-4 py-2 rounded-lg hover:bg-indigo-700">Forçar Vínculo</button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Secção 2: Ficheiro da NF Anexado (PDF da Fatura em si) */}
+            <div>
+              <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2 mb-4 uppercase tracking-wider"><FileText size={16} className="text-indigo-500" /> Cópia da Nota Fiscal (PDF/Imagem)</h3>
+              {anexoPDF ? (
+                <div className="border border-slate-200 rounded-2xl p-5 bg-white shadow-sm flex items-center justify-between group hover:border-indigo-300 transition-all relative overflow-hidden">
+                  <div className="absolute top-0 left-0 w-1.5 h-full bg-emerald-500"></div>
+                  <div className="flex items-center gap-5 pl-2">
+                    <div className="w-16 h-16 rounded-2xl flex items-center justify-center shrink-0 border border-slate-100 bg-slate-50 text-emerald-500 shadow-sm">
+                      {anexoPDF.type.includes('image') ? <FileImage size={28} /> : <FileBadge2 size={28} />}
+                    </div>
+                    <div>
+                      <p className="font-bold text-slate-800 text-base truncate max-w-sm">{anexoPDF.name}</p>
+                      <div className="flex items-center gap-2 mt-1">
+                        <span className="text-[10px] font-black text-slate-400 bg-slate-100 px-2 py-0.5 rounded uppercase tracking-wider">{anexoPDF.size}</span>
+                        <span className="text-[11px] font-bold text-emerald-600 flex items-center gap-1"><CheckCircle2 size={14}/> Nota salva na base de dados</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <a href={anexoPDF.url} target="_blank" rel="noreferrer" className="flex items-center justify-center w-10 h-10 bg-indigo-50 text-indigo-600 rounded-xl hover:bg-indigo-600 hover:text-white transition-colors shadow-sm" title="Visualizar Ficheiro"><Eye size={18} /></a>
+                    <button onClick={() => setAnexosNf(prev => {const n = {...prev}; delete n[nfSelecionada.id]; return n;})} className="flex items-center justify-center w-10 h-10 bg-rose-50 text-rose-500 rounded-xl hover:bg-rose-500 hover:text-white transition-colors shadow-sm" title="Eliminar Anexo"><Trash2 size={18} /></button>
+                  </div>
+                </div>
+              ) : (
+                <div className="border-2 border-dashed border-slate-200 rounded-2xl p-6 bg-slate-50/50 flex flex-col items-center justify-center text-center hover:bg-slate-50 transition-colors">
+                  <p className="text-sm font-bold text-slate-600 mb-3">A fatura em PDF ainda não foi anexada aqui.</p>
+                  <input type="file" id={`modal-file-nf-${nfSelecionada.id}`} className="hidden" accept="image/*,.pdf" onChange={(e) => handleUploadPDFNota(nfSelecionada.id, e)} />
+                  <label htmlFor={`modal-file-nf-${nfSelecionada.id}`} className="flex items-center justify-center gap-2 px-6 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-bold text-slate-700 hover:bg-indigo-50 hover:text-indigo-700 cursor-pointer transition-colors shadow-sm">
+                    <UploadCloud size={16} /> Anexar Ficheiro da NF
+                  </label>
+                </div>
+              )}
+            </div>
+            
+            {isVinculado && (
+              <div className="pt-4 border-t border-slate-100 flex justify-end">
+                <button onClick={() => handleDesvincular(nfSelecionada.id)} className="text-xs font-bold text-rose-500 hover:text-rose-700 underline">
+                  Atenção: Desvincular esta NF de qualquer Pedido
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderSetores = () => {
+    return (
+      <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500 max-w-7xl mx-auto">
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6 mb-4">
+          <div>
+            <h2 className="text-3xl font-bold text-slate-800 tracking-tight">Análise & Cobrança Setorial</h2>
+            <p className="text-slate-500 mt-1 text-sm">Controle as faturas que chegaram, identifique o pedido origem e cobre o Lançamento Fiscal dos responsáveis.</p>
+          </div>
+          <div className="flex items-center gap-3 bg-white p-1.5 rounded-2xl shadow-sm border border-slate-200">
+            <div className="pl-3 text-slate-400"><Filter size={18} /></div>
+            <select 
+              value={filtroSetor}
+              onChange={(e) => setFiltroSetor(e.target.value)}
+              className="bg-transparent border-none rounded-xl pr-8 py-2 text-slate-700 font-bold text-sm focus:outline-none focus:ring-0 cursor-pointer"
+            >
+              <option value="Todos">Todos os Centros de Custo</option>
+              {setores.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </div>
+        </div>
+
+        <div className="space-y-10">
+          {setores.filter(s => filtroSetor === 'Todos' || s === filtroSetor).map(setor => {
+            const nfsDoSetor = nfsMapeadas.filter(n => n.centroCusto === setor);
+            
+            // As faturas "pendentes" são as que NÃO têm lançamento fiscal comprovado
+            const nfsAtrasadas = nfsDoSetor.filter(nf => !dadosFiscais[nf.id]);
+            const progressoSetor = nfsDoSetor.length > 0 ? Math.round(((nfsDoSetor.length - nfsAtrasadas.length) / nfsDoSetor.length) * 100) : 0;
+            const emailSetor = emailsSetores[setor] || "";
+            
+            // Lógica do E-mail Automático de Cobrança Focado na NF!
+            let mailtoLink = '#';
+            if (emailSetor && nfsAtrasadas.length > 0) {
+              const listaPendentes = nfsAtrasadas.slice(0, 15).map(nf => {
+                const pedInfo = nf.pedido ? `Referência: Pedido ${nf.pedido.numeroPedido} - ${nf.pedido.descricao}` : 'Sem pedido vinculado no painel';
+                return `-> Nota Fiscal: ${nf.numero}\n   Fornecedor: ${nf.nome}\n   Valor: ${formatCurrency(nf.valor)}\n   ${pedInfo}\n   Aguardando há: ${nf.diasAtraso} dias.`;
+              }).join('\n\n');
+              const extraTxt = nfsAtrasadas.length > 15 ? `\n\n... e mais ${nfsAtrasadas.length - 15} Notas Fiscais pendentes de envio.` : '';
+              const body = `Olá equipe,\n\nIdentificamos ${nfsAtrasadas.length} Nota(s) Fiscal(is) aguardando o vosso Lançamento Fiscal para o centro de custo [${setor}].\n\nPor favor, confirmem o recebimento dos itens, procedam com o lançamento fiscal no ERP e anexem o print/comprovativo no painel para que a área financeira possa prosseguir com o pagamento:\n\n${listaPendentes}${extraTxt}\n\nAgradecemos a atenção.\nDepartamento Financeiro`;
+              mailtoLink = `mailto:${emailSetor}?subject=${encodeURIComponent(`Ação Necessária: Lançamento Fiscal Pendente - ${setor}`)}&body=${encodeURIComponent(body)}`;
+            }
+
+            return (
+              <div key={setor} className="bg-slate-100/50 rounded-3xl p-6 md:p-8 border border-slate-200/60 shadow-sm relative">
+                
+                {/* Header do Setor */}
+                <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center mb-8 gap-5">
+                  <div className="flex-1 w-full">
+                    <div className="flex items-center gap-3 mb-2">
+                      <span className="text-[10px] font-black text-indigo-500 tracking-widest uppercase bg-indigo-100 px-2.5 py-1 rounded-lg">Segmento Operacional</span>
+                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest bg-white border border-slate-200 px-2 py-1 rounded-md shadow-sm">{setor.split(' - ')[0]}</span>
+                    </div>
+                    <h3 className="font-black text-slate-800 text-2xl lg:text-3xl tracking-tight">{setor.split(' - ')[1] || setor}</h3>
+                    
+                    <div className="flex items-center gap-3 mt-4 w-full max-w-md">
+                      <div className="w-full bg-slate-200/80 rounded-full h-2 overflow-hidden shadow-inner">
+                        <div className={`h-2 rounded-full transition-all duration-1000 ${progressoSetor === 100 ? 'bg-emerald-500' : 'bg-indigo-500'}`} style={{ width: `${progressoSetor}%` }}></div>
+                      </div>
+                      <span className="text-xs font-black text-slate-500 w-12">{progressoSetor}% Ok</span>
+                    </div>
+                  </div>
+                  
+                  {/* Bloco de E-mail e Botão Inteligente */}
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full lg:w-auto bg-white p-2 rounded-2xl shadow-sm border border-slate-200">
+                    <div className="relative group flex-1 sm:w-72">
+                      <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-indigo-500 transition-colors" size={16} />
+                      <input 
+                        type="email" 
+                        placeholder="E-mail do responsável do setor..." 
+                        value={emailsSetores[setor] || ''}
+                        onChange={(e) => setEmailsSetores(prev => ({ ...prev, [setor]: e.target.value }))}
+                        className="w-full pl-9 pr-4 py-3 bg-slate-50/50 border-none rounded-xl text-sm font-medium focus:outline-none focus:ring-0 focus:bg-white transition-all"
+                      />
+                    </div>
+                    <a 
+                      href={mailtoLink}
+                      onClick={(e) => { if(!emailSetor || nfsAtrasadas.length === 0) e.preventDefault(); }}
+                      className={`flex justify-center items-center gap-2 px-6 py-3 rounded-xl text-sm font-bold transition-all shadow-sm shrink-0 ${emailSetor && nfsAtrasadas.length > 0 ? 'bg-indigo-600 hover:bg-indigo-700 text-white shadow-indigo-600/20 active:scale-95' : 'bg-slate-100 text-slate-400 cursor-not-allowed'}`}
+                    >
+                      <Send size={16} className={emailSetor && nfsAtrasadas.length > 0 ? 'fill-current text-indigo-300' : ''} /> 
+                      Cobrar Setor ({nfsAtrasadas.length})
+                    </a>
+                  </div>
+                </div>
+
+                {/* Caixinhas das Notas Fiscais */}
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+                  {nfsDoSetor.map(nf => {
+                    const statusFiscal = dadosFiscais[nf.id];
+                    const atrasoCritico = nf.diasAtraso > 15;
+
+                    return (
+                      <div key={nf.id} className={`bg-white rounded-2xl border transition-all duration-300 flex flex-col justify-between overflow-hidden shadow-sm hover:shadow-md ${statusFiscal ? 'border-emerald-200' : 'border-slate-200 hover:border-indigo-300'}`}>
+                        
+                        {/* Topo do Cartão -> Abre Detalhes */}
+                        <div onClick={() => handleAbrirDetalhes(nf)} className="p-5 cursor-pointer hover:bg-slate-50/50 transition-colors">
+                          <div className="flex justify-between items-start mb-3">
+                            <div className="min-w-0 pr-3">
+                              <div className="flex items-center gap-2 mb-1">
+                                <p className="text-xs font-black text-slate-800 uppercase tracking-wider">NF {nf.numero}</p>
+                                {anexosNf[nf.id] && <span className="bg-slate-100 text-slate-500 p-1 rounded-md" title="PDF Anexado"><FileText size={10}/></span>}
+                              </div>
+                              <p className="text-[11px] font-bold text-slate-500 truncate mt-0.5">{nf.nome}</p>
+                            </div>
+                            <div className="flex flex-col items-end shrink-0 gap-1.5">
+                              <span className="text-base font-black text-slate-900 tracking-tight">{formatCurrency(nf.valor)}</span>
+                              {!statusFiscal && (
+                                <span className={`text-[9px] font-black px-2 py-1 rounded-md flex items-center gap-1 uppercase tracking-wider ${atrasoCritico ? 'bg-rose-100 text-rose-700' : 'bg-amber-100 text-amber-700'}`}>
+                                  <Clock size={10} strokeWidth={3}/> {nf.diasAtraso} dias
+                                </span>
+                              )}
+                              {statusFiscal && (
+                                <span className="text-[9px] font-black px-2 py-1 rounded-md bg-emerald-100 text-emerald-700 uppercase tracking-wider flex items-center gap-1">
+                                  <CheckCircle2 size={10} strokeWidth={3}/> Concluído
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          
+                          {/* Descrição do Pedido Contextual */}
+                          <div className="mt-4 bg-slate-50 rounded-xl p-3 border border-slate-100">
+                            {nf.pedido ? (
+                              <>
+                                <span className="text-[9px] font-black text-indigo-500 uppercase tracking-wider block mb-1">Ref: Pedido {nf.pedido.numeroPedido}</span>
+                                <p className="text-[11px] text-slate-600 line-clamp-2 leading-relaxed font-medium" title={nf.pedido.descricao}>
+                                  {nf.pedido.descricao}
+                                </p>
+                              </>
+                            ) : setoresManuais[nf.id] ? (
+                              <p className="text-[11px] text-indigo-600 font-bold py-2 text-center bg-indigo-50 rounded-lg">Encaminhada para o Setor Manualmente</p>
+                            ) : (
+                              <p className="text-[11px] text-amber-600 font-bold italic py-2 text-center">Fatura sem pedido de origem vinculado.</p>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Rodapé: Ação de Compliance Fiscal */}
+                        <div className="px-5 py-4 bg-slate-50/80 border-t border-slate-100 flex items-center justify-between">
+                          {statusFiscal ? (
+                            <div className="flex items-center justify-between w-full">
+                              <div>
+                                <p className="text-[10px] font-black text-emerald-600 uppercase tracking-wider flex items-center gap-1"><CheckCircle2 size={14} className="fill-emerald-100"/> Fiscal Lançado</p>
+                                <p className="text-[9px] text-slate-500 font-medium mt-1">Por {statusFiscal.nome}</p>
+                              </div>
+                              <a href={statusFiscal.fileUrl} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 px-3 py-2 bg-white border border-slate-200 text-slate-600 hover:text-indigo-600 hover:border-indigo-200 rounded-lg transition-colors text-[10px] font-bold shadow-sm">
+                                <Eye size={14}/> Ver Print
+                              </a>
+                            </div>
+                          ) : (
+                            <button 
+                              onClick={(e) => { e.stopPropagation(); setFormFiscalNome(''); setFormFiscalFile(null); setModalFiscalOpen(nf.id); }}
+                              className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-600 hover:border-indigo-400 hover:text-indigo-700 hover:shadow-sm hover:bg-indigo-50 transition-all group"
+                            >
+                              Registrar Lançamento <ArrowRight size={14} className="opacity-0 group-hover:opacity-100 -ml-4 group-hover:ml-0 transition-all"/>
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  })}
+                  {nfsDoSetor.length === 0 && (
+                    <div className="col-span-full text-center py-8 text-slate-400 font-medium text-sm border-2 border-dashed border-slate-200 rounded-3xl">
+                      Este setor não tem notas fiscais pendentes na base atual.
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
+  const renderDashboard = () => (
+    <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500 max-w-7xl mx-auto">
+      <div>
+        <h2 className="text-3xl font-bold text-slate-800 tracking-tight">Painel Executivo</h2>
+        <p className="text-slate-500 mt-1">Acompanhamento financeiro, saúde das conciliações e gargalos setoriais.</p>
+      </div>
+      
+      {/* Cards Superiores */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        <div className="bg-white rounded-3xl p-6 border border-slate-100 shadow-[0_4px_20px_-4px_rgba(0,0,0,0.05)] relative overflow-hidden group">
+          <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity"><SearchCode size={80} /></div>
+          <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 relative z-10">Aguardando Conciliação</p>
+          <h3 className="text-4xl font-black text-slate-800 relative z-10">{kpis.notasParaConciliar}</h3>
+          <p className="text-[11px] font-bold text-slate-500 mt-4 relative z-10 bg-slate-50 w-max px-2 py-1 rounded">Faturas "Órfãs" de Pedido</p>
+        </div>
+
+        <div className="bg-white rounded-3xl p-6 border border-slate-100 shadow-[0_4px_20px_-4px_rgba(0,0,0,0.05)] relative overflow-hidden group">
+          <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity"><AlertCircle size={80} /></div>
+          <p className="text-xs font-bold text-rose-400 uppercase tracking-wider mb-2 relative z-10">Pendentes de Fiscal</p>
+          <h3 className="text-4xl font-black text-rose-600 relative z-10">{kpis.pendentesFiscal}</h3>
+          <p className="text-sm font-bold text-rose-500 mt-4 relative z-10 truncate">{formatCurrency(kpis.valorPendenteFiscal)} parados</p>
+        </div>
+
+        <div className="bg-indigo-600 rounded-3xl p-6 shadow-xl shadow-indigo-600/20 text-white relative overflow-hidden lg:col-span-2 flex flex-col justify-between">
+          <div className="absolute -top-10 -right-10 w-48 h-48 bg-white/10 rounded-full blur-3xl"></div>
+          <div>
+            <p className="text-xs font-bold text-indigo-200 uppercase tracking-wider mb-1">Índice Global de Conciliação</p>
+            <div className="flex items-baseline space-x-2">
+              <h3 className="text-6xl font-black text-white tracking-tighter">{kpis.progresso}%</h3>
+              <span className="text-indigo-200 font-medium text-lg">saudável</span>
+            </div>
+          </div>
+          <div className="w-full bg-indigo-950/40 rounded-full h-3 backdrop-blur-sm mt-6 overflow-hidden">
+            <div className="bg-white rounded-full h-3 transition-all duration-1000 ease-out" style={{ width: `${kpis.progresso}%` }}></div>
+          </div>
+        </div>
+      </div>
+
+      {/* Gráficos e Tabelas Top Pendências */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="lg:col-span-2 bg-white rounded-3xl border border-slate-100 p-6 shadow-[0_4px_20px_-4px_rgba(0,0,0,0.02)]">
+          <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider mb-6 flex items-center gap-2"><Building2 size={16} className="text-indigo-500"/> Faturas Atrasadas por Setor</h3>
+          <div className="h-72 w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={topSetoresPendentes} margin={{ top: 10, right: 10, left: 0, bottom: 20 }}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                <XAxis dataKey="nome" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#64748b', fontWeight: 'bold' }} dy={10} />
+                <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#64748b' }} tickFormatter={(val) => `R$ ${val/1000}k`} />
+                <RechartsTooltip cursor={{fill: '#f8fafc'}} contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 4px 20px rgba(0,0,0,0.08)', fontWeight: 'bold' }} formatter={(value) => formatCurrency(value)} />
+                <Bar dataKey="valor" fill="#4f46e5" radius={[8, 8, 0, 0]} barSize={45}>
+                  {topSetoresPendentes.map((entry, index) => <Cell key={`cell-${index}`} fill={index === 0 ? '#f43f5e' : '#818cf8'} />)}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-3xl border border-slate-100 p-6 shadow-[0_4px_20px_-4px_rgba(0,0,0,0.02)] flex flex-col">
+          <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider mb-6 flex items-center gap-2">🔥 Atenção Crítica</h3>
+          <p className="text-xs text-slate-500 mb-4 font-medium">Os 4 setores que mais retêm capital financeiro aguardando lançamento.</p>
+          <div className="flex-1 space-y-3 overflow-y-auto pr-2">
+            {topSetoresPendentes.map((setor, index) => (
+              <div key={index} className="flex items-center justify-between p-3.5 rounded-2xl border border-slate-50 bg-slate-50/50 hover:bg-rose-50 hover:border-rose-100 transition-colors group">
+                <div className="flex items-center gap-3">
+                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-black text-sm shadow-sm ${index === 0 ? 'bg-rose-500 text-white shadow-rose-500/30' : 'bg-white text-slate-400'}`}>
+                    {index + 1}º
+                  </div>
+                  <div>
+                    <p className="text-sm font-bold text-slate-800 group-hover:text-rose-700">{setor.nome}</p>
+                    <p className="text-[11px] font-medium text-slate-500 mt-0.5">{setor.qtde} notas atrasadas</p>
+                  </div>
+                </div>
+                <span className="text-sm font-black text-slate-800">{formatCurrency(setor.valor)}</span>
+              </div>
+            ))}
+            {topSetoresPendentes.length === 0 && (
+              <div className="text-center py-10 text-emerald-500 font-bold bg-emerald-50 rounded-2xl border border-emerald-100">
+                <CheckCircle2 size={32} className="mx-auto mb-2" />
+                Nenhuma pendência crítica!
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="min-h-screen bg-[#F8FAFC] flex overflow-hidden font-sans text-slate-900 selection:bg-indigo-100 selection:text-indigo-900">
+      
+      {renderModalDetalhesNF()}
+      {renderModalLancarFiscal()}
+
+      {/* Sidebar Mobile Overlay */}
+      {!isSidebarOpen && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-40 lg:hidden" onClick={() => setIsSidebarOpen(true)}></div>
+      )}
+
+      {/* Sidebar */}
+      <aside className={`fixed lg:static inset-y-0 left-0 z-50 w-72 bg-white border-r border-slate-200 flex flex-col transition-transform duration-300 ease-in-out shadow-[4px_0_24px_rgba(0,0,0,0.02)] ${!isSidebarOpen ? '-translate-x-full lg:translate-x-0 lg:w-20' : 'translate-x-0'}`}>
+        <div className="h-24 flex items-center justify-between px-6 border-b border-slate-100 bg-white shrink-0">
+          {isSidebarOpen ? (
+             <img src="https://i.postimg.cc/PL4CxYYK/as-02.png" alt="Logo" className="h-14 object-contain" />
+          ) : (
+             <img src="https://i.postimg.cc/PL4CxYYK/as-02.png" alt="Logo" className="h-9 object-contain mx-auto" />
+          )}
+          <button className="lg:hidden p-2 text-slate-400 hover:bg-slate-50 rounded-xl" onClick={() => setIsSidebarOpen(false)}><X size={20} /></button>
+        </div>
+
+        <nav className={`flex-1 overflow-y-auto py-6 px-4 space-y-2 ${!isSidebarOpen && 'lg:items-center lg:px-2 flex flex-col'}`}>
+          
+          {isSidebarOpen && <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 px-4 mt-2">Navegação Principal</p>}
+          
+          <button onClick={() => setActiveTab('dashboard')} className={`w-full flex items-center space-x-3 px-4 py-3.5 rounded-2xl transition-all text-sm font-semibold ${activeTab === 'dashboard' ? 'bg-indigo-50 text-indigo-700 shadow-sm' : 'text-slate-500 hover:bg-slate-50'}`} title="Dashboard">
+            <LayoutDashboard size={20} className={activeTab === 'dashboard' ? 'text-indigo-600' : 'text-slate-400'} />
+            {isSidebarOpen && <span>Dashboard Executivo</span>}
+          </button>
+
+          <button onClick={() => setActiveTab('setores')} className={`w-full flex items-center space-x-3 px-4 py-3.5 rounded-2xl transition-all text-sm font-semibold ${activeTab === 'setores' ? 'bg-indigo-50 text-indigo-700 shadow-sm' : 'text-slate-500 hover:bg-slate-50'}`} title="Ação Setorial">
+            <Building2 size={20} className={activeTab === 'setores' ? 'text-indigo-600' : 'text-slate-400'} />
+            {isSidebarOpen && <span>Ação & Cobrança</span>}
+          </button>
+
+          {isSidebarOpen && (
+            <div className="mt-8 pt-6 border-t border-slate-100">
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 px-4">Base de Dados</p>
+              <a 
+                href="https://docs.google.com/spreadsheets/d/1mWmng3rSj5l1DhYp5CSuj9sIh0aemrEJ5ZPzTTgYc1I/edit?gid=989529181#gid=989529181" 
+                target="_blank" 
+                rel="noopener noreferrer"
+                className="w-full flex items-center space-x-3 px-4 py-3.5 rounded-2xl transition-all text-sm font-semibold bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200/50 shadow-sm group"
+              >
+                <TableProperties size={20} className="text-emerald-600 group-hover:scale-110 transition-transform" />
+                {isSidebarOpen && <span>Planilha Alimentadora <ExternalLink size={12} className="inline ml-1 opacity-50"/></span>}
+              </a>
+            </div>
+          )}
+        </nav>
+      </aside>
+
+      <main className="flex-1 flex flex-col h-screen overflow-hidden relative">
+        <header className="h-20 bg-white/80 backdrop-blur-md border-b border-slate-200/60 flex items-center justify-between px-8 shrink-0 z-10">
+          <div className="flex items-center gap-4">
+            <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="text-slate-400 hover:text-indigo-600 lg:block hidden transition-colors"><Menu size={22} /></button>
+            <button onClick={() => setIsSidebarOpen(true)} className="text-slate-400 hover:text-indigo-600 lg:hidden transition-colors"><Menu size={22} /></button>
+            <h1 className="text-xl font-bold text-slate-800">
+              {activeTab === 'dashboard' ? 'Painel Analítico' : 'Cobrança Operacional'}
+            </h1>
+          </div>
+          <div className="flex items-center gap-4">
+            {loading ? (
+              <div className="hidden md:flex items-center gap-2 bg-amber-50 text-amber-600 px-3 py-1.5 rounded-full text-xs font-bold border border-amber-100">
+                <Loader2 size={12} className="animate-spin" /> Atualizando...
+              </div>
+            ) : (
+              <div className="hidden md:flex items-center gap-2 bg-emerald-50 text-emerald-600 px-3 py-1.5 rounded-full text-xs font-bold border border-emerald-100">
+                <span className="relative flex h-2 w-2"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span><span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span></span> Ao Vivo
+              </div>
+            )}
+          </div>
+        </header>
+
+        <div className="flex-1 overflow-y-auto p-6 md:p-8">
+          <div className="h-full">
+            {activeTab === 'dashboard' && renderDashboard()}
+            {activeTab === 'setores' && renderSetores()}
+          </div>
+        </div>
+      </main>
+
+    </div>
+  );
+}
