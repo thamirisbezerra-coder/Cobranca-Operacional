@@ -92,6 +92,12 @@
         const formatCnpj = (cnpj) => cleanCnpj(cnpj).replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/, "$1.$2.$3/$4-$5");
         const formatCurrency = (value) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value || 0);
 
+        const formatChave = (chave) => {
+          const c = String(chave || '').replace(/\D/g, '');
+          if (c.length !== 44) return chave; 
+          return c.replace(/(\d{4})(?=\d)/g, '$1 ').trim();
+        };
+
         const parseDate = (dateStr) => {
           if (!dateStr) return new Date();
           if (dateStr.includes('T')) return new Date(dateStr);
@@ -109,6 +115,8 @@
         // --- Mapeamentos ---
         const mapNFs = (data) => data.map((item, index) => ({
           id: String(item['Chave de Acesso'] || item['Número'] || `nf-${index}`) + `_idx_${index}`,
+          chaveAcesso: String(item['Chave de Acesso'] || ''),
+          descricaoMaterial: String(item['Descrição'] || item['Descrição do Item'] || item['Descrição do Material'] || item['Material'] || item['Produto/Serviço'] || ''),
           cnpj: String(item['CNPJ Emitente'] || ''),
           nome: String(item['Nome PJ Emitente'] || 'Fornecedor Não Identificado'),
           data: String(item['Data Emissão'] || new Date().toLocaleDateString('pt-BR')),
@@ -374,7 +382,12 @@
                         </span>
                       </div>
                       <h2 className="text-2xl md:text-3xl font-bold text-slate-900 tracking-tight">{nfSelecionada.nome}</h2>
-                      <p className="text-sm text-slate-500 mt-2 font-medium">CNPJ: {formatCnpj(nfSelecionada.cnpj)}</p>
+                      <div className="mt-3 space-y-1.5">
+                        <p className="text-sm text-slate-600 font-medium flex items-center gap-2"><Building2 size={14} className="text-slate-400"/> CNPJ: {formatCnpj(nfSelecionada.cnpj)}</p>
+                        {nfSelecionada.chaveAcesso && (
+                          <p className="text-xs text-slate-500 font-mono flex items-center gap-2"><span className="font-semibold text-slate-600 font-sans">Chave de Acesso:</span> {formatChave(nfSelecionada.chaveAcesso)}</p>
+                        )}
+                      </div>
                     </div>
                     <button onClick={() => setNfSelecionada(null)} className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors">
                       <X size={20} />
@@ -443,8 +456,8 @@
                       ) : pedContext ? (
                         <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 relative">
                           <div className="lg:col-span-2">
-                            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">Descrição do Item</p>
-                            <p className="text-sm font-medium text-slate-800 leading-relaxed bg-slate-50 p-3 rounded-lg border border-slate-100">{pedContext.descricao}</p>
+                            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">Descrição do Material</p>
+                            <p className="text-sm font-medium text-slate-800 leading-relaxed bg-slate-50 p-4 rounded-xl border border-slate-200 shadow-inner">{pedContext.descricao}</p>
                             <div className="flex flex-wrap items-center gap-2 mt-4">
                               <span className="text-xs bg-slate-100 border border-slate-200 px-2.5 py-1.5 rounded-lg font-semibold text-slate-700 flex items-center gap-1.5"><TableProperties size={14}/> Pedido {pedContext.numeroPedido}</span>
                               <span className="text-xs bg-indigo-50 border border-indigo-100 text-indigo-700 px-2.5 py-1.5 rounded-lg font-semibold flex items-center gap-1.5"><Building2 size={14}/> {pedContext.centroCusto}</span>
@@ -452,7 +465,7 @@
                           </div>
                           <div>
                             <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">Quantidade</p>
-                            <p className="text-sm font-bold text-slate-800 bg-slate-50 p-3 rounded-lg border border-slate-100 inline-block">{pedContext.quantidade} UND</p>
+                            <p className="text-sm font-bold text-slate-800 bg-slate-50 p-4 rounded-xl border border-slate-200 shadow-inner inline-block">{pedContext.quantidade} UND</p>
                           </div>
                           <div className="lg:text-right">
                             <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">Valor Autorizado</p>
@@ -462,9 +475,17 @@
                       ) : (
                         <div className="bg-amber-50 border border-amber-200/60 rounded-xl p-5 flex items-start gap-4">
                           <div className="bg-amber-100 text-amber-600 p-2 rounded-lg shrink-0"><AlertCircle size={24}/></div>
-                          <div>
+                          <div className="flex-1">
                               <p className="text-sm font-bold text-amber-900">Nota Fiscal sem Pedido vinculado</p>
                               <p className="text-sm text-amber-700 mt-1">O sistema não conseguiu cruzar o CNPJ desta fatura com os pedidos recentes.</p>
+                              
+                              {nfSelecionada.descricaoMaterial && (
+                                <div className="mt-4 bg-white/60 p-4 rounded-xl border border-amber-200/60">
+                                  <p className="text-[10px] font-bold text-amber-800 uppercase tracking-wider mb-1">Descrição que veio na Nota Fiscal:</p>
+                                  <p className="text-sm font-medium text-amber-900 leading-relaxed">{nfSelecionada.descricaoMaterial}</p>
+                                </div>
+                              )}
+
                               {setoresManuais[nfSelecionada.id] ? (
                                 <div className="mt-4 inline-flex items-center gap-2 text-xs text-blue-700 bg-blue-50 border border-blue-100 px-3 py-2 rounded-lg font-semibold"><CheckCircle2 size={16} /> Encaminhada para: {setoresManuais[nfSelecionada.id]}</div>
                               ) : (
@@ -611,20 +632,31 @@
                             <div key={`nf-card-${nf.id}-${nIdx}`} className={`bg-slate-50 rounded-2xl border transition-all duration-300 flex flex-col justify-between overflow-hidden group hover:shadow-md ${statusFiscal ? 'border-emerald-200 bg-emerald-50/30' : 'border-slate-200 hover:border-blue-300'}`}>
                               <div onClick={() => handleAbrirDetalhes(nf)} className="p-5 cursor-pointer relative h-full flex flex-col">
                                 <div className="flex justify-between items-start mb-4">
-                                  <div className="min-w-0 pr-3">
+                                  <div className="min-w-0 pr-3 flex-1">
                                     <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider bg-white border border-slate-200 px-2 py-1 rounded-md shadow-sm inline-block mb-2">NF {nf.numero}</span>
                                     <p className="text-sm font-bold text-slate-800 line-clamp-1">{nf.nome}</p>
+                                    {nf.chaveAcesso && (
+                                        <p className="text-[9px] text-slate-400 font-mono mt-1 truncate" title={nf.chaveAcesso}>Chave: {nf.chaveAcesso}</p>
+                                    )}
                                   </div>
-                                  <div className="flex flex-col items-end shrink-0 gap-1.5">
+                                  <div className="flex flex-col items-end shrink-0 gap-1.5 ml-2">
                                     <span className="text-base font-black text-slate-900 tracking-tight">{formatCurrency(nf.valor)}</span>
                                     {!statusFiscal && <span className="text-[10px] font-bold px-2 py-1 rounded border bg-white text-slate-600 border-slate-200 uppercase tracking-wider flex items-center gap-1"><Clock size={10}/> {nf.diasAtraso}d</span>}
                                   </div>
                                 </div>
-                                <div className="mt-auto pt-3">
+                                <div className="mt-auto pt-3 border-t border-slate-200/60 border-dashed">
                                   {nf.pedido ? (
-                                    <div className="flex items-center gap-2 text-xs text-slate-500 font-medium bg-white p-2.5 rounded-lg border border-slate-100 shadow-sm"><TableProperties size={14} className="text-blue-500"/> Ref: Ped. {nf.pedido.numeroPedido}</div>
+                                    <div className="space-y-2">
+                                      <div className="flex items-center gap-2 text-xs text-slate-500 font-semibold"><TableProperties size={14} className="text-blue-500"/> Ped. {nf.pedido.numeroPedido}</div>
+                                      <p className="text-xs text-slate-600 line-clamp-2 leading-relaxed bg-white p-2.5 rounded-lg border border-slate-100 shadow-sm" title={nf.pedido.descricao}>{nf.pedido.descricao}</p>
+                                    </div>
                                   ) : (
-                                    <div className="flex items-center gap-2 text-xs text-amber-700 font-semibold bg-amber-100/50 p-2.5 rounded-lg border border-amber-200/50"><AlertTriangle size={14} className="text-amber-500"/> Fatura sem pedido</div>
+                                    <div className="space-y-2">
+                                      <div className="flex items-center gap-2 text-xs text-amber-700 font-semibold"><AlertTriangle size={14} className="text-amber-500"/> Fatura sem pedido</div>
+                                      {nf.descricaoMaterial && (
+                                        <p className="text-xs text-slate-600 line-clamp-2 leading-relaxed bg-white p-2.5 rounded-lg border border-slate-100 shadow-sm" title={nf.descricaoMaterial}>{nf.descricaoMaterial}</p>
+                                      )}
+                                    </div>
                                   )}
                                 </div>
                               </div>
@@ -685,8 +717,17 @@
                             <span className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-2.5 py-1 rounded-md flex items-center gap-1"><AlertTriangle size={12}/> Pendente</span>
                           </div>
                           <h4 className="text-base font-bold text-slate-800 leading-tight mb-1">{nf.nome}</h4>
-                          <p className="text-xs text-slate-500 mb-4 font-medium">CNPJ: {formatCnpj(nf.cnpj)}</p>
-                          <p className="text-2xl font-black text-slate-900 tracking-tight">{formatCurrency(nf.valor)}</p>
+                          <p className="text-xs text-slate-500 font-medium">CNPJ: {formatCnpj(nf.cnpj)}</p>
+                          {nf.chaveAcesso && (
+                            <p className="text-[10px] text-slate-400 font-mono mt-1 mb-2 break-all">Chave: {nf.chaveAcesso}</p>
+                          )}
+                          <p className="text-2xl font-black text-slate-900 tracking-tight mt-2">{formatCurrency(nf.valor)}</p>
+                          {nf.descricaoMaterial && (
+                            <div className="mt-4 p-3 bg-slate-50 rounded-xl border border-slate-100">
+                                <p className="text-[10px] font-bold text-slate-500 uppercase mb-1">Descrição na Nota:</p>
+                                <p className="text-xs font-medium text-slate-700">{nf.descricaoMaterial}</p>
+                            </div>
+                          )}
                         </div>
                         
                         <div className="flex-1 w-full bg-slate-50 p-5 rounded-2xl border border-slate-100">
