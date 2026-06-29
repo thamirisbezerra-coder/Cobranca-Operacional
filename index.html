@@ -80,7 +80,8 @@
           CheckCircle2, AlertCircle, Filter, Menu, X, ArrowRight, 
           TableProperties, Clock, FileText, FileBadge2, FileImage, 
           Trash2, Eye, Camera, Send, Mail, UserCircle2, Pencil,
-          TrendingUp, AlertTriangle, FileCheck2, ChevronRight, Wand2
+          TrendingUp, AlertTriangle, FileCheck2, ChevronRight, Wand2,
+          Copy, ExternalLink, Settings, DownloadCloud, Loader2
         } from 'lucide-react';
         import { 
           BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, 
@@ -160,9 +161,25 @@
           const [formFiscalNome, setFormFiscalNome] = useState('');
           const [formFiscalObs, setFormFiscalObs] = useState('');
           const [formFiscalFile, setFormFiscalFile] = useState(null);
+          
+          // --- Novos Estados para Arquivei ---
+          const [arquiveiConfig, setArquiveiConfig] = useState({ apiId: '', apiKey: '' });
+          const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
+          const [isFetchingArquivei, setIsFetchingArquivei] = useState(false);
+
+          // Novo estado para o feedback de cópia da chave
+          const [chaveCopiada, setChaveCopiada] = useState(false);
 
           const [loading, setLoading] = useState(true);
           const [error, setError] = useState(null);
+
+          // Carregar config do Arquivei ao iniciar
+          useEffect(() => {
+            const savedConfig = localStorage.getItem('arquiveiConfig');
+            if (savedConfig) {
+              setArquiveiConfig(JSON.parse(savedConfig));
+            }
+          }, []);
 
           useEffect(() => {
             const fetchPlanilha = async () => {
@@ -278,6 +295,87 @@
             setFormFiscalFile(null);
           };
 
+          // Nova função para buscar DANFE em portal externo
+          const handleConsultarDanfe = (chave) => {
+            const cleanChave = String(chave).replace(/\D/g, '');
+            
+            // Copia para a área de transferência compatível com iFrames
+            const textArea = document.createElement("textarea");
+            textArea.value = cleanChave;
+            document.body.appendChild(textArea);
+            textArea.select();
+            try { document.execCommand('copy'); } catch (err) {}
+            document.body.removeChild(textArea);
+            
+            setChaveCopiada(true);
+            setTimeout(() => setChaveCopiada(false), 3000);
+            
+            // Abre o portal gratuito (Fsist) em nova aba
+            window.open('https://www.fsist.com.br/', '_blank');
+          };
+
+          // --- Integração com API do Arquivei ---
+          const handleBuscarArquivei = async (chave) => {
+            if (!arquiveiConfig.apiId || !arquiveiConfig.apiKey) {
+                setIsConfigModalOpen(true);
+                return;
+            }
+            
+            const cleanChave = String(chave).replace(/\D/g, '');
+            setIsFetchingArquivei(true);
+            
+            try {
+                // Chamada à API do Arquivei (Endpoint de DANFE)
+                const response = await fetch(`https://api.arquivei.com.br/v1/nfe/danfe?access_key=${cleanChave}`, {
+                    method: 'GET',
+                    headers: {
+                        'x-api-id': arquiveiConfig.apiId,
+                        'x-api-key': arquiveiConfig.apiKey,
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                if (!response.ok) {
+                    throw new Error('Falha ao comunicar com o Arquivei. Verifique as suas credenciais ou se a nota existe na sua conta.');
+                }
+
+                const data = await response.json();
+                
+                // O Arquivei devolve o PDF em base64 no campo encoded_pdf (ou danfe)
+                const base64Data = data?.data?.encoded_pdf || data?.data?.danfe;
+
+                if (base64Data) {
+                    // Converter Base64 para Blob (Ficheiro PDF)
+                    const byteCharacters = atob(base64Data);
+                    const byteNumbers = new Array(byteCharacters.length);
+                    for (let i = 0; i < byteCharacters.length; i++) {
+                        byteNumbers[i] = byteCharacters.charCodeAt(i);
+                    }
+                    const byteArray = new Uint8Array(byteNumbers);
+                    const blob = new Blob([byteArray], {type: 'application/pdf'});
+                    const url = URL.createObjectURL(blob);
+
+                    // Anexar automaticamente à NF selecionada
+                    setAnexosNf(prev => ({
+                        ...prev,
+                        [nfSelecionada.id]: {
+                            name: `DANFE_${cleanChave}.pdf`,
+                            size: `${(blob.size/1024/1024).toFixed(2)} MB`,
+                            type: 'application/pdf',
+                            url: url
+                        }
+                    }));
+                } else {
+                    throw new Error('PDF (DANFE) não encontrado na resposta do Arquivei.');
+                }
+            } catch (err) {
+                console.error(err);
+                alert(err.message || 'Erro ao buscar no Arquivei. Pode ser um bloqueio de CORS do navegador; neste caso necessitará de um backend.');
+            } finally {
+                setIsFetchingArquivei(false);
+            }
+          };
+
           // --- Renderizações de Modais ---
           const renderModalLancarFiscal = () => {
             if (!modalFiscalOpen) return null;
@@ -356,6 +454,63 @@
                       className="px-6 py-2.5 bg-slate-900 text-white text-sm font-semibold rounded-xl hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-sm flex items-center gap-2"
                     >
                       Confirmar Lançamento <CheckCircle2 size={16} />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          };
+
+          const renderModalConfigArquivei = () => {
+            if (!isConfigModalOpen) return null;
+            return (
+              <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[200] flex items-center justify-center p-4 animate-fade-in">
+                <div className="bg-white rounded-[24px] w-full max-w-md shadow-2xl overflow-hidden flex flex-col transform transition-all animate-slide-up border border-slate-200/50">
+                  <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-900">
+                    <h2 className="text-lg font-semibold text-white flex items-center gap-2">
+                      <Settings size={20} /> Integração Arquivei
+                    </h2>
+                    <button onClick={() => setIsConfigModalOpen(false)} className="p-1.5 text-white/70 hover:text-white bg-white/10 hover:bg-white/20 rounded-xl transition-colors">
+                      <X size={18} />
+                    </button>
+                  </div>
+                  <div className="p-6 space-y-6 bg-slate-50/50">
+                    <div className="bg-blue-50 border border-blue-200 p-4 rounded-2xl">
+                      <p className="text-sm text-blue-800 font-medium">Insira as suas credenciais da API do Arquivei para extrair os PDFs automaticamente.</p>
+                      <p className="text-xs text-blue-600 mt-2">Estes dados ficam salvos localmente, apenas no seu navegador.</p>
+                    </div>
+                    
+                    <div>
+                      <label className="block text-sm font-semibold text-slate-700 mb-2">API ID (x-api-id)</label>
+                      <input 
+                        type="text" 
+                        value={arquiveiConfig.apiId}
+                        onChange={(e) => setArquiveiConfig({...arquiveiConfig, apiId: e.target.value})}
+                        className="w-full p-3 bg-white border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none font-medium shadow-sm"
+                        placeholder="Ex: 1234567890abcdef..."
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-semibold text-slate-700 mb-2">API Key (x-api-key)</label>
+                      <input 
+                        type="password" 
+                        value={arquiveiConfig.apiKey}
+                        onChange={(e) => setArquiveiConfig({...arquiveiConfig, apiKey: e.target.value})}
+                        className="w-full p-3 bg-white border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none font-medium shadow-sm"
+                        placeholder="A sua chave secreta..."
+                      />
+                    </div>
+                  </div>
+                  <div className="p-5 border-t border-slate-100 bg-white flex justify-end gap-3">
+                    <button onClick={() => setIsConfigModalOpen(false)} className="px-5 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition-colors">Cancelar</button>
+                    <button 
+                      onClick={() => {
+                          localStorage.setItem('arquiveiConfig', JSON.stringify(arquiveiConfig));
+                          setIsConfigModalOpen(false);
+                      }}
+                      className="px-6 py-2.5 bg-blue-600 text-white text-sm font-semibold rounded-xl hover:bg-blue-700 transition-all shadow-sm flex items-center gap-2"
+                    >
+                      Salvar Credenciais
                     </button>
                   </div>
                 </div>
@@ -529,7 +684,32 @@
 
                     {/* Seção Cópia NF */}
                     <div>
-                      <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2 mb-4 uppercase tracking-wide"><FileText size={18} className="text-blue-600" /> Cópia da Nota Fiscal (PDF/Img)</h3>
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
+                        <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2 uppercase tracking-wide"><FileText size={18} className="text-blue-600" /> Cópia da Nota Fiscal (PDF/Img)</h3>
+                        
+                        {nfSelecionada.chaveAcesso && cleanCnpj(nfSelecionada.chaveAcesso).length === 44 && (
+                          <div className="flex flex-wrap items-center gap-2">
+                              <button 
+                                onClick={() => handleBuscarArquivei(nfSelecionada.chaveAcesso)}
+                                disabled={isFetchingArquivei}
+                                className="flex items-center gap-2 px-4 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded-xl text-xs font-bold transition-colors shadow-sm border border-emerald-200 disabled:opacity-50"
+                              >
+                                {isFetchingArquivei ? <Loader2 size={14} className="animate-spin" /> : <DownloadCloud size={14} />}
+                                {isFetchingArquivei ? 'Buscando...' : 'Puxar do Arquivei'}
+                              </button>
+                              
+                              <button 
+                                onClick={() => handleConsultarDanfe(nfSelecionada.chaveAcesso)}
+                                className="flex items-center gap-2 px-4 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-xl text-xs font-bold transition-colors shadow-sm border border-indigo-100"
+                              >
+                                {chaveCopiada ? <CheckCircle2 size={14} className="text-emerald-500" /> : <Copy size={14} />}
+                                {chaveCopiada ? 'Chave Copiada!' : 'Baixar PDF Online'}
+                                <ExternalLink size={14} className="ml-1 opacity-50" />
+                              </button>
+                          </div>
+                        )}
+                      </div>
+
                       {anexoPDF ? (
                         <div className="border border-slate-200 rounded-2xl p-4 bg-white shadow-sm flex flex-col sm:flex-row items-center justify-between gap-4 group hover:border-slate-300 transition-all">
                           <div className="flex items-center gap-4 w-full sm:w-auto">
@@ -879,6 +1059,7 @@
             <div className="min-h-screen bg-[#F8FAFC] flex overflow-hidden font-sans text-slate-900">
               {renderModalDetalhesNF()}
               {renderModalLancarFiscal()}
+              {renderModalConfigArquivei()}
               
               {/* Sidebar PRO */}
               <aside className={`fixed lg:static inset-y-0 left-0 z-50 w-72 bg-white border-r border-slate-200 flex flex-col transition-all duration-300 ease-in-out shadow-sm ${!isSidebarOpen ? '-translate-x-full lg:translate-x-0 lg:w-20' : 'translate-x-0'}`}>
@@ -927,6 +1108,13 @@
                     <h1 className="text-lg font-bold text-slate-800 tracking-tight hidden sm:block">{activeTab === 'dashboard' ? 'Painel Analítico' : activeTab === 'conciliacao' ? 'Conciliação Rápida' : 'Cobrança Operacional'}</h1>
                   </div>
                   <div className="flex items-center gap-3">
+                    <button 
+                        onClick={() => setIsConfigModalOpen(true)}
+                        title="Configurar Arquivei"
+                        className="w-9 h-9 rounded-full bg-white flex items-center justify-center text-slate-500 border border-slate-200 hover:bg-slate-50 hover:text-blue-600 transition-colors shadow-sm"
+                    >
+                        <Settings size={18} />
+                    </button>
                     <div className="w-9 h-9 rounded-full bg-slate-200 flex items-center justify-center text-slate-500 border border-slate-300">
                       <UserCircle2 size={20} />
                     </div>
