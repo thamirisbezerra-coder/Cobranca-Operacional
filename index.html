@@ -1315,6 +1315,13 @@
             // -- Estados de Busca & Filtros --
             const [filtroSetor, setFiltroSetor] = useState('Todos');
             const [globalSearch, setGlobalSearch] = useState('');
+            const [debouncedSearch, setDebouncedSearch] = useState(''); // Estado inteligente para pesquisa rápida
+
+            // Efeito para atrasar a pesquisa (Debounce) e não travar a tela
+            useEffect(() => {
+                const timer = setTimeout(() => setDebouncedSearch(globalSearch), 300);
+                return () => clearTimeout(timer);
+            }, [globalSearch]);
 
             // -- Estados de Dados Base --
             const [nfsOriginais, setNfsOriginais] = useState([]);
@@ -1380,15 +1387,37 @@
 
             const firebaseReady = vInit && smInit && esInit && hcInit && obInit && dmInit && dfInit;
 
-            // -- Lógica Derivada (Memoized) --
+            // -- Mapas de Busca Rápida (O(1) Lookup para Performance Extrema) --
+            const pedidosById = useMemo(() => {
+                const map = new Map();
+                pedidos.forEach(p => map.set(p.id, p));
+                return map;
+            }, [pedidos]);
+
+            const pedidosByCnpj = useMemo(() => {
+                const map = new Map();
+                pedidos.forEach(p => {
+                    const c = cleanCnpj(p.cnpj);
+                    if (c && !map.has(c)) map.set(c, p);
+                });
+                return map;
+            }, [pedidos]);
+
+            const vinculosByNfId = useMemo(() => {
+                const map = new Map();
+                vinculos.forEach(v => map.set(v.nfId, v));
+                return map;
+            }, [vinculos]);
+
+            // -- Lógica Derivada (Memoized & Otimizada) --
             const nfsMapeadas = useMemo(() => {
                 let mapeadas = nfsOriginais.map(nf => {
-                    const vinculo = vinculos.find(v => v.nfId === nf.id);
-                    let pedidoRelacionado = vinculo ? pedidos.find(p => p.id === vinculo.pedidoId) : null;
+                    // Busca incrivelmente mais rápida usando os Mapas em vez de .find()
+                    const vinculo = vinculosByNfId.get(nf.id);
+                    let pedidoRelacionado = vinculo ? pedidosById.get(vinculo.pedidoId) : null;
                     
                     if (!pedidoRelacionado) {
-                        const possiveis = pedidos.filter(p => cleanCnpj(p.cnpj) === cleanCnpj(nf.cnpj));
-                        if (possiveis.length > 0) pedidoRelacionado = possiveis[0]; 
+                        pedidoRelacionado = pedidosByCnpj.get(cleanCnpj(nf.cnpj)) || null; 
                     }
                     
                     let centroCusto = 'Setor Indefinido (Sem Pedido)';
@@ -1413,9 +1442,9 @@
                     };
                 });
 
-                // Aplica Filtro Global
-                if (globalSearch) {
-                    const term = globalSearch.toLowerCase();
+                // Aplica Filtro Global com base no texto atrasado (sem congelar tela)
+                if (debouncedSearch) {
+                    const term = debouncedSearch.toLowerCase();
                     mapeadas = mapeadas.filter(nf => 
                         nf.numero.includes(term) || 
                         nf.nome.toLowerCase().includes(term) || 
@@ -1424,7 +1453,7 @@
                     );
                 }
                 return mapeadas;
-            }, [nfsOriginais, pedidos, vinculos, setoresManuais, globalSearch, observacoesNf, descricoesManuais]);
+            }, [nfsOriginais, vinculosByNfId, pedidosById, pedidosByCnpj, setoresManuais, debouncedSearch, observacoesNf, descricoesManuais]);
 
             const setores = useMemo(() => Array.from(new Set(nfsMapeadas.map(n => n.centroCusto))).sort(), [nfsMapeadas]);
             const setoresDisponiveis = useMemo(() => Array.from(new Set(pedidos.map(p => p.centroCusto))).filter(Boolean).sort(), [pedidos]);
