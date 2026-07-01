@@ -72,16 +72,16 @@
     <div id="root"></div>
 
     <script type="text/babel" data-type="module">
-        import React, { useState, useMemo, useEffect, useCallback, createContext, useContext } from 'react';
+        import React, { useState, useMemo, useEffect, useCallback, createContext, useContext, useRef } from 'react';
         import { createRoot } from 'react-dom/client';
         import { 
           LayoutDashboard, Link2, Building2, UploadCloud, Search, 
           CheckCircle2, AlertCircle, Filter, Menu, X, ArrowRight, 
           TableProperties, Clock, FileText, FileBadge2, FileImage, 
           Trash2, Eye, Camera, Send, Mail, UserCircle2, Pencil,
-          TrendingUp, AlertTriangle, FileCheck2, ChevronRight, Wand2,
+          TrendingUp, AlertTriangle, FileCheck2, ChevronRight, ChevronDown, Wand2,
           Copy, ExternalLink, Settings, DownloadCloud, Loader2, Info, History,
-          Wallet, FileWarning, Timer
+          Wallet, FileWarning, Timer, MessageSquare
         } from 'lucide-react';
         import { 
           BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, 
@@ -95,11 +95,30 @@
         const formatCnpj = (cnpj) => cleanCnpj(cnpj).replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/, "$1.$2.$3/$4-$5");
         const formatCurrency = (value) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value || 0);
         const formatCurrencyCompact = (value) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', notation: 'compact', maximumFractionDigits: 2 }).format(value || 0);
+        
+        // Conversor inteligente de moeda brasileira para número
+        const parseNumber = (val) => {
+            if (typeof val === 'number') return val;
+            if (!val) return 0;
+            let v = String(val).trim();
+            // Remove R$, espaços e caracteres não numéricos exceto , e .
+            v = v.replace(/R\$\s?/g, '').replace(/[^\d.,-]/g, '').trim();
+            // Se tiver ponto de milhar e vírgula de centavo (ex: 1.500,00)
+            if (v.includes('.') && v.includes(',')) {
+                v = v.replace(/\./g, '').replace(',', '.');
+            } else if (v.includes(',')) {
+                // Se tiver apenas vírgula (ex: 1500,00)
+                v = v.replace(',', '.');
+            }
+            return Number(v) || 0;
+        };
+
         const formatChave = (chave) => {
           const c = String(chave || '').replace(/\D/g, '');
           if (c.length !== 44) return chave; 
           return c.replace(/(\d{4})(?=\d)/g, '$1 ').trim();
         };
+        
         const parseDate = (dateStr) => {
           if (!dateStr) return new Date();
           if (dateStr.includes('T')) return new Date(dateStr);
@@ -107,6 +126,7 @@
           if (parts.length === 3) return new Date(parts[2], parts[1] - 1, parts[0]);
           return new Date();
         };
+        
         const calcularDiasAtraso = (dataStr) => {
           const diffTime = new Date().getTime() - parseDate(dataStr).getTime();
           return Math.max(0, Math.floor(diffTime / (1000 * 60 * 60 * 24)));
@@ -122,7 +142,7 @@
             nome: String(item['Nome PJ Emitente'] || 'Fornecedor Não Identificado'),
             data: String(item['Data Emissão'] || new Date().toLocaleDateString('pt-BR')),
             numero: String(item['Número'] || 'S/N'),
-            valor: Number(item['Valor Total da Nota']) || 0,
+            valor: parseNumber(item['Valor Total da Nota']),
             status: 'pendente'
           };
         });
@@ -135,7 +155,7 @@
             cnpj: String(item['Fornecedor Nº CNPJ'] || ''),
             fornecedor: String(item['Fornecedor Razão Social'] || ''),
             centroCusto: String(item['Centro de Custo de Alocação'] || 'Setor Não Identificado'),
-            valor: Number(item['Valor Total do Item']) || 0,
+            valor: parseNumber(item['Valor Total do Item']),
             descricao: String(descricaoProduto),
             quantidade: String(item['Quantidade do item'] || '1')
           };
@@ -200,7 +220,7 @@
                         </div>
                     </div>
                     
-                    {/* Cards de Métricas Principais (Layout Premium & Compacto) */}
+                    {/* Cards de Métricas Principais */}
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
                         
                         {/* Card 1: Total Base */}
@@ -374,6 +394,7 @@
             } = useAppContext();
 
             const [emailPreview, setEmailPreview] = useState(null);
+            const [collapsedSectors, setCollapsedSectors] = useState({});
 
             const formatarData = (isoString) => {
                 if (!isoString) return '';
@@ -410,16 +431,27 @@
                                 ? "bg-indigo-50/40 border-indigo-200" 
                                 : "bg-white border-slate-200";
 
+                            const isCollapsed = collapsedSectors[setor];
+
                             return (
                                 <div key={`setor-card-${idx}`} className={`${cardWrapperClasses} rounded-3xl p-6 md:p-8 border shadow-sm relative overflow-hidden transition-colors duration-500`}>
                                     <div className={`absolute top-0 right-0 p-12 pointer-events-none transition-opacity ${isCobrado ? 'text-indigo-600 opacity-5' : 'text-slate-900 opacity-5'}`}>
                                         <Building2 size={120} />
                                     </div>
                                     
-                                    <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center mb-8 gap-6 relative z-10">
+                                    <div className={`flex flex-col lg:flex-row justify-between items-start lg:items-center gap-6 relative z-10 ${isCollapsed ? '' : 'mb-8'}`}>
                                         <div className="flex-1 w-full">
                                             <div className="flex items-center gap-3 mb-3">
-                                                <h3 className={`font-bold text-xl lg:text-2xl tracking-tight ${isCobrado ? 'text-indigo-900' : 'text-slate-800'}`}>{setor}</h3>
+                                                <div 
+                                                    className="flex items-center gap-2 cursor-pointer group"
+                                                    onClick={() => setCollapsedSectors(prev => ({...prev, [setor]: !prev[setor]}))}
+                                                    title={isCollapsed ? "Expandir setor" : "Recolher setor"}
+                                                >
+                                                    <button className={`p-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-500 transition-all duration-300 ${isCollapsed ? '-rotate-90' : 'rotate-0'}`}>
+                                                        <ChevronDown size={20} />
+                                                    </button>
+                                                    <h3 className={`font-bold text-xl lg:text-2xl tracking-tight ${isCobrado ? 'text-indigo-900' : 'text-slate-800'} group-hover:text-blue-600 transition-colors`}>{setor}</h3>
+                                                </div>
                                                 {ultimaCobranca && (
                                                     <span className="flex items-center gap-1.5 text-[10px] font-bold text-indigo-700 bg-indigo-100 border border-indigo-200 px-2.5 py-1 rounded-full whitespace-nowrap shadow-sm">
                                                         <History size={12} /> Cobrado: {formatarData(ultimaCobranca)}
@@ -451,16 +483,19 @@
                                         </div>
                                     </div>
 
-                                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5 relative z-10">
-                                        {nfsDoSetor.map((nf, nIdx) => {
-                                            const statusFiscal = dadosFiscais[nf.id];
-                                            const isOrphan = !nf.pedido;
-                                            
+                                    {!isCollapsed && (
+                                        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5 relative z-10 animate-fade-in">
+                                            {nfsDoSetor.map((nf, nIdx) => {
+                                                const statusFiscal = dadosFiscais[nf.id];
+                                                const isOrphan = !nf.pedido;
                                             const cardClasses = statusFiscal 
                                                 ? 'border-emerald-200 bg-emerald-50/30' 
                                                 : isOrphan 
                                                     ? 'border-amber-300 bg-amber-50/40 hover:border-amber-400' 
                                                     : 'border-slate-200 bg-slate-50 hover:border-blue-300';
+
+                                            // Pegar a última observação para exibir no preview do card
+                                            const ultimaObs = nf.observacoes && nf.observacoes.length > 0 ? nf.observacoes[nf.observacoes.length - 1] : null;
 
                                             return (
                                                 <div key={`nf-card-${nf.id}-${nIdx}`} className={`rounded-2xl border transition-all duration-300 flex flex-col justify-between overflow-hidden group hover:shadow-md ${cardClasses}`}>
@@ -496,10 +531,13 @@
                                                                 </div>
                                                             )}
                                                             
-                                                            {nf.observacaoInterna && (
-                                                                <div className="mt-3 p-2 bg-blue-50 border border-blue-100 rounded-lg flex items-start gap-2">
-                                                                    <Pencil size={12} className="text-blue-500 shrink-0 mt-0.5" />
-                                                                    <p className="text-[10px] text-blue-800 font-medium italic line-clamp-2" title={nf.observacaoInterna}>{nf.observacaoInterna}</p>
+                                                            {ultimaObs && (
+                                                                <div className="mt-3 p-2.5 bg-blue-50 border border-blue-100 rounded-lg flex flex-col gap-1">
+                                                                    <div className="flex items-center gap-1.5">
+                                                                        <UserCircle2 size={12} className="text-blue-500 shrink-0" />
+                                                                        <span className="text-[9px] font-bold text-blue-700 uppercase tracking-wider">{ultimaObs.user}</span>
+                                                                    </div>
+                                                                    <p className="text-[11px] text-blue-800 font-medium italic line-clamp-2 pl-4" title={ultimaObs.text}>{ultimaObs.text}</p>
                                                                 </div>
                                                             )}
                                                         </div>
@@ -519,7 +557,8 @@
                                                 </div>
                                             )
                                         })}
-                                    </div>
+                                        </div>
+                                    )}
                                 </div>
                             );
                         })}
@@ -671,6 +710,8 @@
                                 return (pCnpj && pCnpj.startsWith(rootCnpj)) || (p.fornecedor && p.fornecedor.toLowerCase().includes(primeiroNome));
                             }).slice(0, 3);
 
+                            const ultimaObs = nf.observacoes && nf.observacoes.length > 0 ? nf.observacoes[nf.observacoes.length - 1] : null;
+
                             return (
                                 <div key={`concil-${nf.id}`} className="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm flex flex-col xl:flex-row gap-6 items-start hover:shadow-md transition-shadow">
                                     <div className="xl:w-1/3 w-full shrink-0">
@@ -687,10 +728,13 @@
                                                 <p className="text-xs font-medium text-slate-700">{nf.descricaoManual || nf.descricaoMaterial}</p>
                                             </div>
                                         )}
-                                        {nf.observacaoInterna && (
-                                            <div className="mt-3 p-3 bg-blue-50 rounded-xl border border-blue-100 flex items-start gap-2">
-                                                <Pencil size={14} className="text-blue-500 shrink-0 mt-0.5" />
-                                                <p className="text-xs text-blue-800 font-medium italic">{nf.observacaoInterna}</p>
+                                        {ultimaObs && (
+                                            <div className="mt-3 p-3 bg-blue-50 rounded-xl border border-blue-100 flex flex-col gap-1">
+                                                <div className="flex items-center gap-1.5">
+                                                    <UserCircle2 size={12} className="text-blue-500 shrink-0" />
+                                                    <span className="text-[9px] font-bold text-blue-700 uppercase tracking-wider">{ultimaObs.user}</span>
+                                                </div>
+                                                <p className="text-xs text-blue-800 font-medium italic pl-4">{ultimaObs.text}</p>
                                             </div>
                                         )}
                                     </div>
@@ -773,21 +817,56 @@
                 nfSelecionada, setNfSelecionada, setoresManuais, setSetoresManuais, 
                 pedidos, handleVincularManual, isEditingNfInfo, setIsEditingNfInfo, editSetor, setEditSetor, 
                 setoresDisponiveis, searchPedidoStr, setSearchPedidoStr, addToast, dadosFiscais, setModalFiscalOpen,
-                observacoesNf, setObservacoesNf, descricoesManuais, setDescricoesManuais
+                observacoesNf, setObservacoesNf, descricoesManuais, setDescricoesManuais,
+                usuarioAtual // Novo context do usuário
             } = useAppContext();
 
-            const [tempObs, setTempObs] = useState('');
             const [tempDesc, setTempDesc] = useState('');
+            const [novoComentario, setNovoComentario] = useState('');
+            const endOfChatRef = useRef(null);
 
             useEffect(() => {
                 if (nfSelecionada) {
-                    setTempObs(nfSelecionada.observacaoInterna || '');
                     setTempDesc(nfSelecionada.descricaoManual || '');
+                    // Scroll to bottom of chat when opened
+                    setTimeout(() => {
+                        endOfChatRef.current?.scrollIntoView({ behavior: 'smooth' });
+                    }, 100);
                 }
             }, [nfSelecionada]);
 
             if (!nfSelecionada) return null;
             const pedContext = nfSelecionada.pedido;
+            
+            // Garantir que as observações sejam um array para o Chat
+            const comentarios = Array.isArray(nfSelecionada.observacoes) ? nfSelecionada.observacoes : [];
+
+            const handleAddComentario = () => {
+                if (!novoComentario.trim()) return;
+                
+                const newComment = { 
+                    id: Date.now(), 
+                    user: usuarioAtual || 'Analista', 
+                    text: novoComentario.trim(), 
+                    date: new Date().toISOString() 
+                };
+                
+                setObservacoesNf(prev => {
+                    const currentComments = Array.isArray(prev[nfSelecionada.id]) ? prev[nfSelecionada.id] : [];
+                    return { ...prev, [nfSelecionada.id]: [...currentComments, newComment] };
+                });
+                
+                // Atualizar o state local da nfSelecionada para refletir na interface na hora
+                setNfSelecionada(prev => ({
+                    ...prev,
+                    observacoes: [...(Array.isArray(prev.observacoes) ? prev.observacoes : []), newComment]
+                }));
+                
+                setNovoComentario('');
+                setTimeout(() => {
+                    endOfChatRef.current?.scrollIntoView({ behavior: 'smooth' });
+                }, 100);
+            };
 
             return (
                 <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[100] flex items-center justify-center p-4 animate-fade-in">
@@ -963,25 +1042,57 @@
                                 </div>
                             )}
 
-                            {/* Observações Internas */}
-                            <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm mt-8">
-                                <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2 uppercase tracking-wide mb-4">
-                                    <Pencil size={18} className="text-blue-600" /> Observações Internas
+                            {/* CHAT - Observações Internas */}
+                            <div className="bg-white p-6 md:p-8 rounded-2xl border border-slate-200 shadow-sm mt-8">
+                                <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2 uppercase tracking-wide mb-6">
+                                    <MessageSquare size={18} className="text-blue-600" /> Observações e Tratativas
                                 </h3>
-                                <textarea 
-                                    value={tempObs} 
-                                    onChange={e => setTempObs(e.target.value)}
-                                    onBlur={() => {
-                                        if (tempObs !== (nfSelecionada.observacaoInterna || '')) {
-                                            setObservacoesNf(prev => ({ ...prev, [nfSelecionada.id]: tempObs }));
-                                            setNfSelecionada(prev => ({...prev, observacaoInterna: tempObs}));
-                                            addToast('Observação salva!', 'success');
-                                        }
-                                    }}
-                                    placeholder="Digite uma observação para esta nota (ex: aguardando boleto, tratativa com fornecedor)... Ela é salva ao clicar fora da caixa."
-                                    className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all shadow-sm resize-none"
-                                    rows="2"
-                                />
+                                
+                                <div className="space-y-4 max-h-[300px] overflow-y-auto mb-6 pr-2">
+                                    {comentarios.length === 0 ? (
+                                        <div className="text-center py-6 text-slate-400">
+                                            <MessageSquare size={32} className="mx-auto mb-2 opacity-50"/>
+                                            <p className="text-sm font-medium">Nenhuma observação registrada ainda.</p>
+                                        </div>
+                                    ) : (
+                                        comentarios.map((c, i) => {
+                                            const isMe = c.user === usuarioAtual;
+                                            return (
+                                                <div key={`chat-${c.id}-${i}`} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} animate-fade-in`}>
+                                                    <span className="text-[10px] font-bold text-slate-500 mb-1 flex items-center gap-1.5 uppercase tracking-wider">
+                                                        <UserCircle2 size={12} /> {c.user} <span className="opacity-50 mx-1">•</span> {new Date(c.date).toLocaleDateString()}
+                                                    </span>
+                                                    <div className={`px-4 py-2.5 rounded-2xl text-sm font-medium max-w-[85%] shadow-sm ${isMe ? 'bg-blue-600 text-white rounded-tr-sm' : 'bg-slate-100 text-slate-800 rounded-tl-sm border border-slate-200/60'}`}>
+                                                        {c.text}
+                                                    </div>
+                                                </div>
+                                            );
+                                        })
+                                    )}
+                                    <div ref={endOfChatRef} />
+                                </div>
+
+                                <div className="flex flex-col sm:flex-row gap-3">
+                                    <textarea 
+                                        value={novoComentario} 
+                                        onChange={e => setNovoComentario(e.target.value)}
+                                        onKeyDown={e => {
+                                            if (e.key === 'Enter' && !e.shiftKey) {
+                                                e.preventDefault();
+                                                handleAddComentario();
+                                            }
+                                        }}
+                                        placeholder="Digite uma observação (Pressione Enter para enviar)..."
+                                        className="flex-1 p-3.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all shadow-sm resize-none h-14"
+                                    />
+                                    <button 
+                                        onClick={handleAddComentario}
+                                        disabled={!novoComentario.trim()}
+                                        className="px-6 py-3.5 bg-slate-900 hover:bg-slate-800 disabled:bg-slate-300 disabled:cursor-not-allowed text-white text-sm font-bold rounded-xl transition-colors shadow-sm flex items-center justify-center gap-2 shrink-0 h-14"
+                                    >
+                                        <Send size={16} /> Enviar
+                                    </button>
+                                </div>
                             </div>
 
                         </div>
@@ -1058,17 +1169,20 @@
         };
 
         const ModalConfigArquivei = () => {
-            const { isConfigModalOpen, setIsConfigModalOpen, emailCobrancaCC, setEmailCobrancaCC, addToast } = useAppContext();
+            const { isConfigModalOpen, setIsConfigModalOpen, emailCobrancaCC, setEmailCobrancaCC, usuarioAtual, setUsuarioAtual, addToast } = useAppContext();
             const [localEmailCC, setLocalEmailCC] = useState(emailCobrancaCC);
+            const [localUser, setLocalUser] = useState(usuarioAtual);
 
             useEffect(() => { 
                 setLocalEmailCC(emailCobrancaCC);
-            }, [emailCobrancaCC]);
+                setLocalUser(usuarioAtual);
+            }, [emailCobrancaCC, usuarioAtual]);
 
             if (!isConfigModalOpen) return null;
 
             const handleSave = () => {
                 setEmailCobrancaCC(localEmailCC);
+                setUsuarioAtual(localUser);
                 setIsConfigModalOpen(false);
                 addToast('Configurações salvas (Apenas Local)', 'success');
             };
@@ -1082,6 +1196,15 @@
                         </div>
                         <div className="p-6 space-y-6 bg-slate-50/50">
                             
+                            {/* Sessão Perfil */}
+                            <div>
+                                <h3 className="text-sm font-bold text-slate-800 mb-3 flex items-center gap-2"><UserCircle2 size={16}/> Seu Perfil (Neste Computador)</h3>
+                                <label className="block text-xs font-semibold text-slate-600 mb-2">Seu Nome (Aparece no Chat de Observações)</label>
+                                <input type="text" value={localUser} onChange={(e) => setLocalUser(e.target.value)} className="w-full p-3 bg-white border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none font-medium shadow-sm" placeholder="Ex: João Silva"/>
+                            </div>
+
+                            <hr className="border-slate-200" />
+
                             {/* Sessão E-mail CC */}
                             <div>
                                 <h3 className="text-sm font-bold text-slate-800 mb-3 flex items-center gap-2"><Mail size={16}/> E-mail e Cobrança</h3>
@@ -1120,13 +1243,12 @@
             const [pedidos, setPedidos] = useState([]);
             
             // -- Estados Persistidos (Auto-save) --
+            const [usuarioAtual, setUsuarioAtual] = useLocalStorage('op_usuario_atual', 'Analista Financeiro');
             const [vinculos, setVinculos] = useLocalStorage('op_vinculos', []);
             const [setoresManuais, setSetoresManuais] = useLocalStorage('op_setores_manuais', {});
             const [emailsSetores, setEmailsSetores] = useLocalStorage('op_emails_setores', {});
             const [emailCobrancaCC, setEmailCobrancaCC] = useLocalStorage('op_email_cc', '');
             const [historicoCobranca, setHistoricoCobranca] = useLocalStorage('op_historico_cobranca', {});
-            
-            // NOVO: Adicionado auto-save para as observações e descrições
             const [observacoesNf, setObservacoesNf] = useLocalStorage('op_observacoes_nf', {});
             const [descricoesManuais, setDescricoesManuais] = useLocalStorage('op_descricoes_manuais', {});
             
@@ -1189,12 +1311,20 @@
                     if (setoresManuais[nf.id]) centroCusto = setoresManuais[nf.id];
                     else if (pedidoRelacionado) centroCusto = pedidoRelacionado.centroCusto;
                     
+                    // Tratamento do histórico de observações (migrando versão string para array se necessário)
+                    let obsHist = observacoesNf[nf.id];
+                    if (typeof obsHist === 'string') {
+                        obsHist = [{ id: Date.now(), user: 'Sistema Legado', text: obsHist, date: new Date().toISOString() }];
+                    } else if (!Array.isArray(obsHist)) {
+                        obsHist = [];
+                    }
+
                     return { 
                         ...nf, 
                         pedido: pedidoRelacionado, 
                         centroCusto, 
                         diasAtraso: calcularDiasAtraso(nf.data),
-                        observacaoInterna: observacoesNf[nf.id] || '',
+                        observacoes: obsHist,
                         descricaoManual: descricoesManuais[nf.id] || ''
                     };
                 });
@@ -1274,7 +1404,7 @@
                 vinculos, setVinculos, setoresManuais, setSetoresManuais, emailsSetores, setEmailsSetores,
                 dadosFiscais, setDadosFiscais,
                 emailCobrancaCC, setEmailCobrancaCC, historicoCobranca, setHistoricoCobranca,
-                observacoesNf, setObservacoesNf, descricoesManuais, setDescricoesManuais,
+                observacoesNf, setObservacoesNf, descricoesManuais, setDescricoesManuais, usuarioAtual, setUsuarioAtual,
                 nfSelecionada, setNfSelecionada, modalFiscalOpen, setModalFiscalOpen, isConfigModalOpen, setIsConfigModalOpen,
                 isEditingNfInfo, setIsEditingNfInfo, editSetor, setEditSetor, searchPedidoStr, setSearchPedidoStr,
                 handleAbrirDetalhes, handleVincularManual, addToast, toasts, removeToast, globalSearch, setGlobalSearch
@@ -1364,8 +1494,8 @@
                                     </div>
                                 </div>
                                 <div className="flex items-center gap-3 shrink-0">
-                                    <button onClick={() => setIsConfigModalOpen(true)} title="Configurar Arquivei" className="w-9 h-9 rounded-full bg-white flex items-center justify-center text-slate-500 border border-slate-200 hover:bg-slate-50 hover:text-blue-600 transition-colors shadow-sm"><Settings size={18} /></button>
-                                    <div className="w-9 h-9 rounded-full bg-slate-200 flex items-center justify-center text-slate-500 border border-slate-300"><UserCircle2 size={20} /></div>
+                                    <button onClick={() => setIsConfigModalOpen(true)} title="Configurações" className="w-9 h-9 rounded-full bg-white flex items-center justify-center text-slate-500 border border-slate-200 hover:bg-slate-50 hover:text-blue-600 transition-colors shadow-sm"><Settings size={18} /></button>
+                                    <div className="w-9 h-9 rounded-full bg-slate-200 flex items-center justify-center text-slate-500 border border-slate-300" title={usuarioAtual}><UserCircle2 size={20} /></div>
                                 </div>
                             </header>
                             
