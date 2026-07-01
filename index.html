@@ -797,116 +797,6 @@
             );
         };
 
-        const ConciliacaoView = () => {
-            const { nfsMapeadas, setoresManuais, setSetoresManuais, pedidos, handleVincularManual, setoresDisponiveis, addToast } = useAppContext();
-            const nfsSemPedido = nfsMapeadas.filter(nf => !nf.pedido && !setoresManuais[nf.id]);
-            
-            return (
-                <div className="space-y-8 max-w-7xl mx-auto animate-fade-in pb-10">
-                    <div className="mb-8">
-                        <h2 className="text-2xl md:text-3xl font-bold text-slate-900 tracking-tight">Conciliação Inteligente</h2>
-                        <p className="text-slate-500 mt-2 text-sm font-medium">Encontramos {nfsSemPedido.length} notas sem pedido de origem ou setor vinculado. Revise as sugestões automáticas abaixo.</p>
-                    </div>
-                    
-                    <div className="space-y-6">
-                        {nfsSemPedido.length === 0 ? (
-                            <div className="bg-emerald-50 border border-emerald-200 rounded-3xl p-10 text-center flex flex-col items-center">
-                                <CheckCircle2 size={48} className="text-emerald-500 mb-4" />
-                                <h3 className="text-xl font-bold text-slate-800">Tudo Conciliado!</h3>
-                                <p className="text-slate-500 mt-2">Todas as faturas ativas já possuem um vínculo de pedido ou setor manual.</p>
-                            </div>
-                        ) : nfsSemPedido.map((nf) => {
-                            const rootCnpj = cleanCnpj(nf.cnpj).substring(0, 8);
-                            const primeiroNome = nf.nome.split(' ')[0].toLowerCase();
-                            
-                            const sugestoes = pedidos.filter(p => {
-                                const pCnpj = cleanCnpj(p.cnpj);
-                                return (pCnpj && pCnpj.startsWith(rootCnpj)) || (p.fornecedor && p.fornecedor.toLowerCase().includes(primeiroNome));
-                            }).slice(0, 3);
-
-                            const ultimaObs = nf.observacoes && nf.observacoes.length > 0 ? nf.observacoes[nf.observacoes.length - 1] : null;
-
-                            return (
-                                <div key={`concil-${nf.id}`} className="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm flex flex-col xl:flex-row gap-6 items-start hover:shadow-md transition-shadow">
-                                    <div className="xl:w-1/3 w-full shrink-0">
-                                        <div className="flex items-center gap-2 mb-3">
-                                            <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider bg-slate-100 px-2.5 py-1 rounded-md">NF {nf.numero}</span>
-                                            <span className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-2.5 py-1 rounded-md flex items-center gap-1"><AlertTriangle size={12}/> Fatura Órfã</span>
-                                        </div>
-                                        <h4 className="text-base font-bold text-slate-800 leading-tight mb-1">{nf.nome}</h4>
-                                        <p className="text-xs text-slate-500 font-medium">CNPJ: {formatCnpj(nf.cnpj)}</p>
-                                        <p className="text-2xl font-black text-slate-900 tracking-tight mt-2">{formatCurrency(nf.valor)}</p>
-                                        {(nf.descricaoManual || nf.descricaoMaterial) && (
-                                            <div className="mt-4 p-3 bg-slate-50 rounded-xl border border-slate-100">
-                                                <p className="text-[10px] font-bold text-slate-500 uppercase mb-1">Descrição na Nota:</p>
-                                                <p className="text-xs font-medium text-slate-700">{nf.descricaoManual || nf.descricaoMaterial}</p>
-                                            </div>
-                                        )}
-                                        {ultimaObs && (
-                                            <div className="mt-3 p-3 bg-blue-50 rounded-xl border border-blue-100 flex flex-col gap-1">
-                                                <div className="flex items-center gap-1.5">
-                                                    <UserCircle2 size={12} className="text-blue-500 shrink-0" />
-                                                    <span className="text-[9px] font-bold text-blue-700 uppercase tracking-wider">{ultimaObs.user}</span>
-                                                </div>
-                                                <p className="text-xs text-blue-800 font-medium italic pl-4">{ultimaObs.text}</p>
-                                            </div>
-                                        )}
-                                    </div>
-                                    
-                                    <div className="flex-1 w-full bg-slate-50 p-5 rounded-2xl border border-slate-100 flex flex-col">
-                                        <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-4 flex items-center gap-2"><Wand2 size={14} className="text-indigo-500"/> Sugestões de Pedidos</p>
-                                        
-                                        {sugestoes.length > 0 ? (
-                                            <div className="space-y-3 flex-1">
-                                                {sugestoes.map(ped => (
-                                                    <div key={`sug-${ped.id}`} className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 bg-white border border-slate-200 rounded-xl shadow-sm hover:border-indigo-300 transition-colors">
-                                                        <div>
-                                                            <div className="flex items-center gap-2 mb-1">
-                                                                <p className="text-sm font-bold text-slate-800">Pedido {ped.numeroPedido}</p>
-                                                                <span className="text-[10px] font-semibold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-full">{ped.centroCusto}</span>
-                                                            </div>
-                                                            <p className="text-xs text-slate-500 line-clamp-1">{ped.fornecedor} • {formatCurrency(ped.valor)}</p>
-                                                        </div>
-                                                        <button onClick={() => { handleVincularManual(nf.id, ped.id); addToast('Vínculo criado!', 'success'); }} className="shrink-0 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold px-4 py-2 rounded-lg flex items-center justify-center gap-2 transition-colors">
-                                                            <Link2 size={14}/> Vincular
-                                                        </button>
-                                                    </div>
-                                                ))}
-                                            </div>
-                                        ) : (
-                                            <div className="text-center py-6 px-4 flex-1 flex flex-col items-center justify-center">
-                                                <Search size={32} className="text-slate-300 mb-3" />
-                                                <p className="text-sm font-medium text-slate-500">Nenhuma correspondência óbvia encontrada pelo CNPJ ou Nome.</p>
-                                            </div>
-                                        )}
-                                        
-                                        <div className="mt-4 p-4 bg-blue-50 border border-blue-100 rounded-xl flex flex-col sm:flex-row gap-3 items-start sm:items-center justify-between">
-                                            <div>
-                                                <p className="text-sm font-bold text-blue-900">Não encontrou o pedido de origem?</p>
-                                                <p className="text-xs text-blue-700 mt-0.5">Encaminhe diretamente para o centro de custo responsável.</p>
-                                            </div>
-                                            <select 
-                                                className="w-full sm:w-auto p-2 rounded-lg text-sm border-blue-200 shadow-sm font-medium text-slate-700 focus:ring-2 focus:ring-blue-500 outline-none cursor-pointer"
-                                                onChange={(e) => { 
-                                                    if(e.target.value) { 
-                                                        setSetoresManuais(prev => ({ ...prev, [nf.id]: e.target.value })); 
-                                                        addToast(`Nota enviada para ${e.target.value}`, 'success');
-                                                    } 
-                                                }}
-                                            >
-                                                <option value="">Selecione um Setor...</option>
-                                                {setoresDisponiveis.map(s => <option key={`opt-concil-${s}`} value={s}>{s}</option>)}
-                                            </select>
-                                        </div>
-                                    </div>
-                                </div>
-                            );
-                        })}
-                    </div>
-                </div>
-            );
-        };
-
         // ==========================================
         // 5. MODAIS & TOASTS
         // ==========================================
@@ -1634,10 +1524,6 @@
                                     <Building2 size={18} className={activeTab === 'setores' ? 'text-blue-400' : ''}/>
                                     {isSidebarOpen && <span>Ação & Cobrança</span>}
                                 </button>
-                                <button onClick={() => setActiveTab('conciliacao')} className={`w-full flex items-center space-x-3 px-4 py-3.5 rounded-xl text-sm font-semibold transition-all ${activeTab === 'conciliacao' ? 'bg-slate-900 text-white shadow-md' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-800'}`}>
-                                    <Wand2 size={18} className={activeTab === 'conciliacao' ? 'text-blue-400' : ''} />
-                                    {isSidebarOpen && <span>Conciliação Inteligente</span>}
-                                </button>
                             </nav>
                             
                             {isSidebarOpen && (
@@ -1673,7 +1559,6 @@
                             <div className="flex-1 overflow-y-auto p-4 md:p-10 scroll-smooth">
                                 {activeTab === 'dashboard' && <DashboardView />}
                                 {activeTab === 'setores' && <SetoresView />}
-                                {activeTab === 'conciliacao' && <ConciliacaoView />}
                             </div>
                         </main>
                     </div>
