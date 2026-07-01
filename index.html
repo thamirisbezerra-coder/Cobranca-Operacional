@@ -88,6 +88,22 @@
           ResponsiveContainer, Cell 
         } from 'recharts';
 
+        // --- FIREBASE IMPORTS & SETUP ---
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        let app, auth, db;
+        try {
+            const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+            app = initializeApp(firebaseConfig);
+            auth = getAuth(app);
+            db = getFirestore(app);
+        } catch (e) {
+            console.error("Firebase init error", e);
+        }
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+
         // ==========================================
         // 1. UTILITÁRIOS & FORMATAÇÃO
         // ==========================================
@@ -179,6 +195,47 @@
                 } catch (error) { console.error(error); }
             };
             return [storedValue, setValue];
+        }
+
+        // Hook de Sincronização em Tempo Real com Banco de Dados na Nuvem (Firestore)
+        function useFirebaseSync(docId, initialValue, user) {
+            const [state, setState] = useState(initialValue);
+            const [initialized, setInitialized] = useState(false);
+
+            useEffect(() => {
+                if (!user || !db) {
+                    setInitialized(true);
+                    return;
+                }
+                const docRef = doc(collection(db, 'artifacts', appId, 'public', 'data', 'app_state'), docId);
+                
+                const unsubscribe = onSnapshot(docRef, (docSnap) => {
+                    if (docSnap.exists()) {
+                        setState(docSnap.data().value);
+                    } else {
+                        setDoc(docRef, { value: initialValue }, { merge: true });
+                        setState(initialValue);
+                    }
+                    setInitialized(true);
+                }, (error) => {
+                    console.error("Firestore sync error:", error);
+                    setInitialized(true);
+                });
+
+                return () => unsubscribe();
+            }, [user, docId]);
+
+            const updateState = useCallback((newValue) => {
+                const valueToStore = typeof newValue === 'function' ? newValue(state) : newValue;
+                setState(valueToStore); // Atualiza visualmente na hora (Optimistic Update)
+                
+                if (user && db) {
+                    const docRef = doc(collection(db, 'artifacts', appId, 'public', 'data', 'app_state'), docId);
+                    setDoc(docRef, { value: valueToStore }, { merge: true }).catch(err => console.error("Erro ao salvar:", err));
+                }
+            }, [user, docId, state]);
+
+            return [state, updateState, initialized];
         }
 
         // ==========================================
@@ -1116,11 +1173,11 @@
                     [modalFiscalOpen]: {
                         nome: formFiscalNome,
                         observacao: formFiscalObs,
-                        data: new Date().toLocaleDateString('pt-BR'),
-                        fileUrl: formFiscalFile ? URL.createObjectURL(formFiscalFile) : null
+                        data: new Date().toLocaleDateString('pt-BR')
+                        // O anexo não vai para a nuvem para não travar o banco. Fica guardada a assinatura e hora.
                     }
                 }));
-                addToast('Lançamento fiscal registrado com sucesso!', 'success');
+                addToast('Lançamento fiscal registrado com sucesso na nuvem!', 'success');
                 setModalFiscalOpen(null);
                 setFormFiscalNome(''); setFormFiscalObs(''); setFormFiscalFile(null);
             };
@@ -1228,6 +1285,27 @@
         // 6. MAIN APP COMPONENT (State & Provider)
         // ==========================================
         function App() {
+            // -- Autenticação Banco de Dados --
+            const [user, setUser] = useState(null);
+
+            useEffect(() => {
+                if (!auth) return;
+                const initAuth = async () => {
+                    try {
+                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                            await signInWithCustomToken(auth, __initial_auth_token);
+                        } else {
+                            await signInAnonymously(auth);
+                        }
+                    } catch (e) {
+                        console.error("Auth error", e);
+                    }
+                };
+                initAuth();
+                const unsubscribe = onAuthStateChanged(auth, setUser);
+                return () => unsubscribe();
+            }, []);
+
             // -- Estados UI Principais --
             const [activeTab, setActiveTab] = useState('dashboard');
             const [isSidebarOpen, setIsSidebarOpen] = useState(true);
@@ -1242,17 +1320,21 @@
             const [nfsOriginais, setNfsOriginais] = useState([]);
             const [pedidos, setPedidos] = useState([]);
             
-            // -- Estados Persistidos (Auto-save) --
+            // -- Dados Locais da Máquina do Usuário --
             const [usuarioAtual, setUsuarioAtual] = useLocalStorage('op_usuario_atual', 'Analista Financeiro');
-            const [vinculos, setVinculos] = useLocalStorage('op_vinculos', []);
-            const [setoresManuais, setSetoresManuais] = useLocalStorage('op_setores_manuais', {});
-            const [emailsSetores, setEmailsSetores] = useLocalStorage('op_emails_setores', {});
+            const [arquiveiConfig, setArquiveiConfig] = useLocalStorage('op_arquivei_config', { apiId: '', apiKey: '' });
             const [emailCobrancaCC, setEmailCobrancaCC] = useLocalStorage('op_email_cc', '');
-            const [historicoCobranca, setHistoricoCobranca] = useLocalStorage('op_historico_cobranca', {});
-            const [observacoesNf, setObservacoesNf] = useLocalStorage('op_observacoes_nf', {});
-            const [descricoesManuais, setDescricoesManuais] = useLocalStorage('op_descricoes_manuais', {});
             
-            const [dadosFiscais, setDadosFiscais] = useState({}); 
+            // -- Estados Persistidos e Compartilhados (Banco de Dados em Nuvem) --
+            const [vinculos, setVinculos, vInit] = useFirebaseSync('vinculos', [], user);
+            const [setoresManuais, setSetoresManuais, smInit] = useFirebaseSync('setores_manuais', {}, user);
+            const [emailsSetores, setEmailsSetores, esInit] = useFirebaseSync('emails_setores', {}, user);
+            const [historicoCobranca, setHistoricoCobranca, hcInit] = useFirebaseSync('historico_cobranca', {}, user);
+            const [observacoesNf, setObservacoesNf, obInit] = useFirebaseSync('observacoes_nf', {}, user);
+            const [descricoesManuais, setDescricoesManuais, dmInit] = useFirebaseSync('descricoes_manuais', {}, user);
+            const [dadosFiscais, setDadosFiscais, dfInit] = useFirebaseSync('dados_fiscais', {}, user);
+            
+            const [anexosNf, setAnexosNf] = useState({}); // Arquivos em cache local na sessão
 
             // -- Estados de Modais & Interações --
             const [nfSelecionada, setNfSelecionada] = useState(null);
@@ -1295,6 +1377,8 @@
                 };
                 fetchPlanilha();
             }, [addToast]);
+
+            const firebaseReady = vInit && smInit && esInit && hcInit && obInit && dmInit && dfInit;
 
             // -- Lógica Derivada (Memoized) --
             const nfsMapeadas = useMemo(() => {
@@ -1411,12 +1495,12 @@
             };
 
             // -- Renders de Carregamento & Erro --
-            if (loading) {
+            if (loading || !firebaseReady) {
                 return (
                     <div className="min-h-screen bg-[#F8FAFC] flex flex-col items-center justify-center">
                         <div className="w-16 h-16 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin mb-6"></div>
                         <h2 className="text-xl font-bold text-slate-800 tracking-tight">Sincronizando Base de Dados</h2>
-                        <p className="text-sm text-slate-500 mt-2 font-medium">Isso pode levar alguns segundos...</p>
+                        <p className="text-sm text-slate-500 mt-2 font-medium">{loading ? 'Puxando faturas da planilha...' : 'Conectando ao banco em nuvem...'}</p>
                     </div>
                 );
             }
