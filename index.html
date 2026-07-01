@@ -654,6 +654,70 @@
                             setEmailPreview(null);
                         };
 
+                        // NOVA FUNÇÃO: Copia o texto em formato HTML/Rico para manter o visual no Gmail
+                        const copyRichTextToClipboard = () => {
+                            let html = `<div style="font-family: Arial, sans-serif; font-size: 14px; color: #333; line-height: 1.5; max-width: 800px;">`;
+                            html += `<p style="margin-bottom: 16px;">Olá equipe do setor <strong style="color: #000;">${emailPreview.setor}</strong>,</p>`;
+                            html += `<p style="margin-bottom: 24px;">Identificamos <strong>${emailPreview.nfs.length} nota(s) fiscal(is)</strong> aguardando a sua validação e lançamento para fiscal.</p>`;
+                            
+                            html += `<div style="margin-bottom: 24px;">`;
+                            emailPreview.nfs.forEach(nf => {
+                                const desc = nf.pedido?.descricao || nf.descricaoManual || nf.descricaoMaterial || 'Não informada';
+                                html += `<div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-left: 4px solid #3b82f6; padding: 16px; margin-bottom: 16px; border-radius: 0 8px 8px 0;">`;
+                                
+                                // Usando Tabela invisível pois garante o alinhamento correto no Gmail
+                                html += `<table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 8px;">`;
+                                html += `<tr>`;
+                                html += `<td align="left" style="padding: 0;"><h4 style="margin: 0; font-size: 15px; color: #000;">NF: ${nf.numero}</h4></td>`;
+                                html += `<td align="right" style="padding: 0;"><span style="font-weight: bold; color: #2563eb; font-size: 15px;">${formatCurrency(nf.valor)}</span></td>`;
+                                html += `</tr>`;
+                                html += `</table>`;
+                                
+                                html += `<p style="margin: 4px 0;"><strong style="color: #475569;">Fornecedor:</strong> ${nf.nome}</p>`;
+                                html += `<p style="margin: 4px 0;"><strong style="color: #475569;">Descrição:</strong> ${desc}</p>`;
+                                html += `<div style="margin-top: 12px; background-color: #ffffff; border: 1px solid #e2e8f0; padding: 8px; border-radius: 6px;">`;
+                                html += `<p style="margin: 0; font-family: monospace; font-size: 13px; color: #64748b;"><strong style="font-family: Arial, sans-serif; color: #475569;">Chave:</strong> ${nf.chaveAcesso || 'Não informada'}</p>`;
+                                html += `</div>`;
+                                html += `</div>`;
+                            });
+                            html += `</div>`;
+
+                            html += `<div style="background-color: #fffbeb; border: 1px solid #fde68a; padding: 20px; border-radius: 8px; margin-bottom: 24px;">`;
+                            html += `<h4 style="margin: 0 0 12px 0; color: #92400e; font-size: 14px;">⚠️ INSTRUÇÕES IMPORTANTES:</h4>`;
+                            html += `<ul style="margin: 0; padding-left: 20px; color: #92400e;">`;
+                            html += `<li style="margin-bottom: 6px;">No importador, vocês podem utilizar tanto o Número da Nota quanto a Chave de Acesso.</li>`;
+                            html += `<li style="margin-bottom: 6px;">Caso alguma nota acima <strong>NÃO seja do seu setor</strong>, por favor, responda este e-mail imediatamente para corrigirmos.</li>`;
+                            html += `<li style="margin-bottom: 0;">Após o lançamento, acesse o painel e anexe o comprovante (print do e-mail) <strong>OBRIGATORIAMENTE</strong> para prosseguirmos.</li>`;
+                            html += `</ul></div>`;
+                            
+                            html += `<p>Atenciosamente,<br/><strong style="color: #000;">Equipe Financeira</strong></p>`;
+                            html += `</div>`;
+
+                            // Criar um elemento fantasma na tela para copiar o HTML processado
+                            const tempDiv = document.createElement("div");
+                            tempDiv.innerHTML = html;
+                            tempDiv.style.position = "absolute";
+                            tempDiv.style.left = "-9999px";
+                            document.body.appendChild(tempDiv);
+                            
+                            const selection = window.getSelection();
+                            const range = document.createRange();
+                            range.selectNodeContents(tempDiv);
+                            selection.removeAllRanges();
+                            selection.addRange(range);
+                            
+                            try {
+                                document.execCommand('copy');
+                                addToast('Copiado com formatação! Cole (Ctrl+V) no Gmail.', 'success');
+                                handleEnviarClick();
+                            } catch (e) {
+                                addToast('Erro ao copiar formatação.', 'error');
+                            }
+                            
+                            selection.removeAllRanges();
+                            document.body.removeChild(tempDiv);
+                        };
+
                         return (
                             <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[200] flex items-center justify-center p-4 animate-fade-in">
                                 <div className="bg-white rounded-[24px] w-full max-w-3xl shadow-2xl overflow-hidden flex flex-col transform transition-all animate-slide-up max-h-[90vh]">
@@ -715,14 +779,7 @@
                                         <button onClick={() => setEmailPreview(null)} className="px-5 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition-colors">Cancelar</button>
                                         
                                         <button 
-                                            onClick={() => {
-                                                navigator.clipboard.writeText(bodyTextoPlano)
-                                                    .then(() => {
-                                                        addToast('Texto copiado! Agora é só colar no Gmail.', 'success');
-                                                        handleEnviarClick();
-                                                    })
-                                                    .catch(() => addToast('Erro ao copiar texto.', 'error'));
-                                            }} 
+                                            onClick={copyRichTextToClipboard} 
                                             className="px-6 py-2.5 bg-slate-100 text-slate-700 border border-slate-300 text-sm font-semibold rounded-xl hover:bg-slate-200 transition-all shadow-sm flex items-center justify-center gap-2"
                                         >
                                             <Copy size={16} /> Copiar Texto
